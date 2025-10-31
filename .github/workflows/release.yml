@@ -1,0 +1,202 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Release Branchd
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Go binaries (ARM64)
+        run: |
+          echo "Building server binary for ARM64..."
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/branchd-arm64/server \
+            ./cmd/server
+
+          echo "Building worker binary for ARM64..."
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/branchd-arm64/worker \
+            ./cmd/worker
+
+      - name: Build Go binaries (AMD64)
+        run: |
+          echo "Building server binary for AMD64..."
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/branchd-amd64/server \
+            ./cmd/server
+
+          echo "Building worker binary for AMD64..."
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/branchd-amd64/worker \
+            ./cmd/worker
+
+      - name: Build Web UI
+        working-directory: web
+        run: |
+          echo "Installing dependencies..."
+          bun install
+
+          echo "Building production bundle..."
+          bun run build
+
+      - name: Create ARM64 bundle
+        run: |
+          mkdir -p dist/branchd-arm64/web
+          cp -r web/dist/* dist/branchd-arm64/web/
+          cd dist
+          tar -czf branchd-linux-arm64.tar.gz branchd-arm64
+          mv branchd-linux-arm64.tar.gz ..
+
+      - name: Create AMD64 bundle
+        run: |
+          mkdir -p dist/branchd-amd64/web
+          cp -r web/dist/* dist/branchd-amd64/web/
+          cd dist
+          tar -czf branchd-linux-amd64.tar.gz branchd-amd64
+          mv branchd-linux-amd64.tar.gz ..
+
+      - name: Build CLI binaries (Linux)
+        run: |
+          echo "Building CLI for Linux AMD64..."
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X github.com/branchd-dev/branchd/internal/cli.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/cli/branchd-linux-amd64 \
+            ./cmd/cli
+
+          echo "Building CLI for Linux ARM64..."
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X github.com/branchd-dev/branchd/internal/cli.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/cli/branchd-linux-arm64 \
+            ./cmd/cli
+
+      - name: Build CLI binaries (macOS)
+        run: |
+          echo "Building CLI for macOS AMD64 (Intel)..."
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X github.com/branchd-dev/branchd/internal/cli.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/cli/branchd-darwin-amd64 \
+            ./cmd/cli
+
+          echo "Building CLI for macOS ARM64 (Apple Silicon)..."
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X github.com/branchd-dev/branchd/internal/cli.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/cli/branchd-darwin-arm64 \
+            ./cmd/cli
+
+      - name: Build CLI binaries (Windows)
+        run: |
+          echo "Building CLI for Windows AMD64..."
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X github.com/branchd-dev/branchd/internal/cli.version=${{ steps.version.outputs.VERSION }}" \
+            -trimpath \
+            -o dist/cli/branchd-windows-amd64.exe \
+            ./cmd/cli
+
+      - name: Generate checksums
+        run: |
+          # Server bundles
+          sha256sum branchd-linux-arm64.tar.gz > branchd-linux-arm64.tar.gz.sha256
+          sha256sum branchd-linux-amd64.tar.gz > branchd-linux-amd64.tar.gz.sha256
+
+          # CLI binaries
+          cd dist/cli
+          sha256sum branchd-linux-amd64 > branchd-linux-amd64.sha256
+          sha256sum branchd-linux-arm64 > branchd-linux-arm64.sha256
+          sha256sum branchd-darwin-amd64 > branchd-darwin-amd64.sha256
+          sha256sum branchd-darwin-arm64 > branchd-darwin-arm64.sha256
+          sha256sum branchd-windows-amd64.exe > branchd-windows-amd64.exe.sha256
+          cd ../..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Branchd ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Server Bundles
+            For self-hosted deployments on Linux servers.
+
+            - `branchd-linux-arm64.tar.gz` - ARM64 (AWS Graviton, etc.)
+            - `branchd-linux-amd64.tar.gz` - x86_64/AMD64
+
+            ## CLI Binaries
+            Command-line tool for managing branches.
+
+            ### Linux
+            - `branchd-linux-amd64` - x86_64/AMD64
+            - `branchd-linux-arm64` - ARM64
+
+            ### macOS
+            - `branchd-darwin-amd64` - Intel Macs
+            - `branchd-darwin-arm64` - Apple Silicon (M1/M2/M3)
+
+            ### Windows
+            - `branchd-windows-amd64.exe` - x86_64/AMD64
+
+            All files include SHA256 checksums for verification.
+          files: |
+            branchd-linux-arm64.tar.gz
+            branchd-linux-arm64.tar.gz.sha256
+            branchd-linux-amd64.tar.gz
+            branchd-linux-amd64.tar.gz.sha256
+            dist/cli/branchd-linux-amd64
+            dist/cli/branchd-linux-amd64.sha256
+            dist/cli/branchd-linux-arm64
+            dist/cli/branchd-linux-arm64.sha256
+            dist/cli/branchd-darwin-amd64
+            dist/cli/branchd-darwin-amd64.sha256
+            dist/cli/branchd-darwin-arm64
+            dist/cli/branchd-darwin-arm64.sha256
+            dist/cli/branchd-windows-amd64.exe
+            dist/cli/branchd-windows-amd64.exe.sha256

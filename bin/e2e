@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# E2E Integration Test Runner
+# Provisions Ubuntu VM, sets up infrastructure, builds and deploys Branchd, runs tests
+
+# Hardcoded test database connection string (PostgreSQL 16 superuser)
+# It's a very small database with only a users table with 3 users.
+PG_16_CONN="postgres://postgres:hCazJJexWqQCzRghehroazRkj5nDbGMpW9JjjtoL5lBFPGi6auHbQ8jZHUZYEluO@p.mgdruzjwa5hk7elhmlnug4somq.db.postgresbridge.com:5432/quic_test"
+
+# Default PostgreSQL version
+PG_VERSION="${TEST_POSTGRES_VERSION:-16}"
+
+# Use hardcoded connection string if not set in environment
+export TEST_CONNECTION_STRING="${TEST_CONNECTION_STRING:-$PG_16_CONN}"
+
+echo "========================================="
+echo "Branchd E2E Test Runner"
+echo "========================================="
+echo "PostgreSQL version: ${PG_VERSION}"
+echo "Connection: ${TEST_CONNECTION_STRING%%@*}@***"
+echo ""
+
+# Check for Terraform variables
+if [ ! -f "tests/terraform/terraform.tfvars" ]; then
+    echo "ERROR: tests/terraform/terraform.tfvars not found"
+    echo ""
+    echo "Create it from the example:"
+    echo "  cp tests/terraform/terraform.tfvars.example tests/terraform/terraform.tfvars"
+    echo ""
+    echo "Then fill in your SSH key pair:"
+    echo "  # Generate new key pair if needed:"
+    echo "  ssh-keygen -t ed25519 -f ~/.ssh/branchd-e2e -N ''"
+    echo ""
+    echo "  # Edit terraform.tfvars:"
+    echo "  ssh_public_key      = \"ssh-ed25519 AAAAC3... your-email@example.com\""
+    echo "  ssh_private_key_path = \"~/.ssh/branchd-e2e\""
+    exit 1
+fi
+
+# Check for required tools
+command -v terraform >/dev/null 2>&1 || { echo "ERROR: terraform not installed"; exit 1; }
+command -v go >/dev/null 2>&1 || { echo "ERROR: go not installed"; exit 1; }
+command -v bun >/dev/null 2>&1 || { echo "ERROR: bun not installed"; exit 1; }
+
+echo "[1/2] Provisioning test VM with infrastructure..."
+cd tests/terraform
+terraform init -upgrade >/dev/null
+terraform apply -auto-approve \
+    -var "postgres_version=${PG_VERSION}"
+
+# Get VM details
+PUBLIC_IP=$(terraform output -raw public_ip)
+API_URL=$(terraform output -raw api_url)
+echo "VM provisioned: ${PUBLIC_IP}"
+echo "API URL: ${API_URL}"
+echo "Infrastructure setup complete (PostgreSQL, ZFS, Redis, Caddy)"
+
+cd ../..
+
+echo ""
+echo "[2/2] Running E2E tests (includes build & deploy)..."
+echo ""
+
+export TEST_POSTGRES_VERSION="${PG_VERSION}"
+
+# Run tests with verbose output
+# BuildAndDeploy is called by the test itself
+go test ./tests/e2e -v -timeout 10m
+
+echo ""
+echo "========================================="
+echo "Tests completed successfully!"
+echo "========================================="
+echo ""
+echo "VM is still running at: ${PUBLIC_IP}"
+echo "To destroy the VM:"
+echo "  cd tests/terraform && terraform destroy -auto-approve"
+echo ""
+echo "To SSH into the VM:"
+echo "  $(terraform -chdir=tests/terraform output -raw ssh_command)"
+echo ""

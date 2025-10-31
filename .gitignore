@@ -1,0 +1,96 @@
+# Environment files
+.env
+
+# Claude AI assistant files
+.claude
+
+# Go
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/server
+bin/worker
+bin/branchd
+dist/
+/server
+/worker
+# Test binary, built with `go test -c`
+#*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+crash.log
+crash.*.log
+
+# Ansible
+*.retry
+.ansible/
+*.ini
+!deployments/ansible/inventory/.gitkeep
+
+# SSH keys
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Logs
+*.log
+logs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Node.js (for web frontend)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# Build outputs
+build/
+coverage/
+
+_swagger/
+
+branchd.sqlite*
+
+instances.db
+
+branchd-bundle.tar.gz
