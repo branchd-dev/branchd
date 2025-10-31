@@ -1,0 +1,244 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Branchd - PostgreSQL database branching"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Instance Configuration"
+        Parameters:
+          - KeyPairName
+          - InstanceType
+          - VolumeSize
+          - PostgreSQLVersion
+    ParameterLabels:
+      InstanceType:
+        default: "Instance Type"
+      VolumeSize:
+        default: "Storage (GB)"
+      PostgreSQLVersion:
+        default: "PostgreSQL Version"
+      KeyPairName:
+        default: "EC2 Key Pair (REQUIRED)"
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t4g.large
+    AllowedValues:
+      - t4g.micro # 1 vCPU, 1 GB RAM
+      - t4g.small # 2 vCPUs, 2 GB RAM
+      - m6g.medium # 1 vCPU, 4 GB RAM
+      - t4g.large # 2 vCPUs, 8 GB RAM
+      - t4g.xlarge # 4 vCPUs, 16 GB RAM
+      - t4g.2xlarge # 8 vCPUs, 32 GB RAM
+      - m6g.4xlarge # 16 vCPUs, 64 GB RAM
+      - m6g.8xlarge # 32 vCPUs, 128 GB RAM
+      - m6g.12xlarge # 48 vCPUs, 192 GB RAM
+      - m6g.16xlarge # 64 vCPUs, 256 GB RAM
+      - r6g.large # 2 vCPUs, 16 GB RAM
+      - r6g.xlarge # 4 vCPUs, 32 GB RAM
+      - r6g.2xlarge # 8 vCPUs, 64 GB RAM
+      - r6g.4xlarge # 16 vCPUs, 128 GB RAM
+      - r6g.8xlarge # 32 vCPUs, 256 GB RAM
+    Description: >-
+      Tip: start with 1/2 or 1/4 of your production instance size. Visit https://aws.amazon.com/ec2/pricing/on-demand/ for specs and pricing.
+
+  VolumeSize:
+    Type: Number
+    Default: 10
+    MinValue: 5
+    MaxValue: 16384
+    Description: >
+      Recommended: 1-1.2x your production database size. Branchd uses compression and copy-on-write for efficient storage.
+
+  PostgreSQLVersion:
+    Type: String
+    Default: "16"
+    AllowedValues:
+      - "14"
+      - "15"
+      - "16"
+      - "17"
+    Description: PostgreSQL version to install. Choose the version that matches your source database.
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: >
+      REQUIRED: Select an existing EC2 key pair for SSH access.
+      If you don't have a key pair, create one at EC2 > Key Pairs before proceeding.
+    ConstraintDescription: You must select a valid EC2 key pair.
+
+Resources:
+  # Elastic IP for persistent public IP
+  BranchdElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-branchd-eip"
+        - Key: ManagedBy
+          Value: branchd
+        - Key: Application
+          Value: branchd
+
+  # Security Group (uses default VPC automatically)
+  BranchdSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-branchd-sg"
+      GroupDescription: Security group for Branchd database branching server
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access (restrict in Security Group after creation)
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP (Caddy redirect to HTTPS)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS (Branchd web UI and API)
+        - IpProtocol: tcp
+          FromPort: 15432
+          ToPort: 16432
+          CidrIp: 0.0.0.0/0
+          Description: PostgreSQL branch ports
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-branchd-sg"
+        - Key: ManagedBy
+          Value: branchd
+        - Key: Application
+          Value: branchd
+
+  # IAM Role for EC2 instance (for future CloudWatch, S3, etc.)
+  BranchdInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-branchd-role"
+        - Key: ManagedBy
+          Value: branchd
+        - Key: Application
+          Value: branchd
+
+  BranchdInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BranchdInstanceRole
+
+  # EC2 Instance
+  BranchdInstance:
+    Type: AWS::EC2::Instance
+    # CreationPolicy disabled for debugging - instance won't auto-rollback on failure
+    # CreationPolicy:
+    #   ResourceSignal:
+    #     Count: 1
+    #     Timeout: PT30M
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id}}"
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref BranchdInstanceProfile
+      SecurityGroupIds:
+        - !Ref BranchdSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+            Encrypted: true
+        - DeviceName: /dev/sdf
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            VolumeType: gp3
+            Iops: 3000
+            DeleteOnTermination: true
+            Encrypted: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+
+          # Log everything to CloudFormation log
+          exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+
+          echo "=== Starting Branchd CloudFormation setup ==="
+          echo "PostgreSQL Version: ${PostgreSQLVersion}"
+          echo "Instance Type: ${InstanceType}"
+          echo "Volume Size: ${VolumeSize} GB"
+
+          # Wait for network and DNS
+          echo "Waiting for network readiness..."
+          for i in {1..60}; do
+            if ping -c1 -W5 8.8.8.8 &>/dev/null && \
+               curl -s --connect-timeout 5 https://raw.githubusercontent.com/branchd-dev/branchd/main/scripts/server_setup.sh -o /dev/null 2>&1; then
+              echo "Network ready!"
+              break
+            fi
+            echo "Network not ready, waiting... ($i/60)"
+            sleep 5
+          done
+
+          # Download and run setup script
+          echo "Downloading Branchd setup script..."
+          curl -fsSL --connect-timeout 30 --max-time 30 https://raw.githubusercontent.com/branchd-dev/branchd/main/scripts/server_setup.sh -o /tmp/server_setup.sh
+          chmod +x /tmp/server_setup.sh
+
+          # Run setup script
+          echo "Running Branchd setup script..."
+          cd /tmp
+          if ./server_setup.sh --pg-version=${PostgreSQLVersion}; then
+            echo "✓ Branchd setup completed successfully"
+          else
+            echo "ERROR: Branchd setup failed!"
+            exit 1
+          fi
+
+          echo "=== CloudFormation setup complete ==="
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vm"
+        - Key: ManagedBy
+          Value: branchd
+        - Key: Application
+          Value: branchd
+        - Key: PostgreSQLVersion
+          Value: !Ref PostgreSQLVersion
+
+  # Associate Elastic IP with instance
+  BranchdEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref BranchdInstance
+      EIP: !Ref BranchdElasticIP
+
+Outputs:
+  IP:
+    Description: VM IP address
+    Value: !Ref BranchdElasticIP
+    Export:
+      Name: !Sub "${AWS::StackName}-ip"
+
+  SSHCommand:
+    Description: SSH command
+    Value: !Sub "ssh ubuntu@${BranchdElasticIP}"

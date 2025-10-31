@@ -1,0 +1,10 @@
+# Example Terraform variables file
+# Copy to terraform.tfvars and fill in your values
+
+region         = "us-east-2"
+instance_type  = "t4g.small"
+postgres_version = "16"
+
+# SSH key pair (generate with: ssh-keygen -t ed25519 -f ~/.ssh/branchd-e2e)
+ssh_public_key      = "ssh-ed25519 AAAAC3... your-email@example.com"
+ssh_private_key_path = "~/.ssh/branchd-e2e"

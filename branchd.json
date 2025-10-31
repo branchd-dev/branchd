@@ -1,0 +1,8 @@
+{
+  "servers": [
+    {
+      "ip": "3.128.177.28",
+      "alias": "production"
+    }
+  ]
+}
