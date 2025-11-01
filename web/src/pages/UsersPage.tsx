@@ -8,7 +8,7 @@ import { Alert, AlertDescription } from "@/shadcn/components/ui/alert";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/shadcn/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shadcn/components/ui/table";
 import { Badge } from "@/shadcn/components/ui/badge";
-import { CheckIcon, CopyIcon, Trash2Icon, UserPlusIcon } from "lucide-react";
+import { Trash2Icon, UserPlusIcon } from "lucide-react";
 
 interface User {
   id: string;
@@ -20,7 +20,6 @@ interface User {
 
 interface CreateUserResponse {
   user: User;
-  token: string;
 }
 
 export function UsersPage() {
@@ -33,11 +32,10 @@ export function UsersPage() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createEmail, setCreateEmail] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
   const [createIsAdmin, setCreateIsAdmin] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
-  const [createdToken, setCreatedToken] = useState("");
-  const [tokenCopied, setTokenCopied] = useState(false);
 
   useEffect(() => {
     loadUsers();
@@ -64,14 +62,15 @@ export function UsersPage() {
       const response = await api.api.usersCreate({
         email: createEmail,
         name: createName,
+        password: createPassword,
         is_admin: createIsAdmin,
       });
 
       const data = response.data as CreateUserResponse;
-      setCreatedToken(data.token);
       setUsers([data.user, ...users]);
 
-      // Don't close dialog immediately - show the token first
+      // Close dialog and reset form
+      closeCreateDialog();
     } catch (err: any) {
       setCreateError(err.message || "Failed to create user");
     } finally {
@@ -92,19 +91,12 @@ export function UsersPage() {
     }
   };
 
-  const copyToken = () => {
-    navigator.clipboard.writeText(createdToken);
-    setTokenCopied(true);
-    setTimeout(() => setTokenCopied(false), 2000);
-  };
-
   const closeCreateDialog = () => {
     setIsCreateDialogOpen(false);
     setCreateName("");
     setCreateEmail("");
+    setCreatePassword("");
     setCreateIsAdmin(false);
-    setCreatedToken("");
-    setTokenCopied(false);
     setCreateError("");
   };
 
@@ -133,123 +125,88 @@ export function UsersPage() {
           </DialogTrigger>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>
-                {createdToken ? "User Created Successfully" : "Create New User"}
-              </DialogTitle>
+              <DialogTitle>Create New User</DialogTitle>
               <DialogDescription>
-                {createdToken
-                  ? "Save the token below - it won't be shown again"
-                  : "Create a new user account and generate their authentication token"}
+                Create a new user account with email and password credentials
               </DialogDescription>
             </DialogHeader>
 
-            {createdToken ? (
-              <div className="space-y-4">
-                <Alert>
-                  <AlertDescription>
-                    <strong>Important:</strong> Save this token now. The user will need it to authenticate via CLI or web.
-                    It will not be shown again.
-                  </AlertDescription>
+            <form onSubmit={handleCreateUser} className="space-y-4">
+              {createError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{createError}</AlertDescription>
                 </Alert>
+              )}
 
-                <div className="space-y-2">
-                  <Label>Authentication Token</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={createdToken}
-                      readOnly
-                      className="font-mono text-sm"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={copyToken}
-                      className="shrink-0"
-                    >
-                      {tokenCopied ? (
-                        <>
-                          <CheckIcon className="h-4 w-4 mr-2" />
-                          Copied!
-                        </>
-                      ) : (
-                        <>
-                          <CopyIcon className="h-4 w-4 mr-2" />
-                          Copy
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    User can authenticate with: <code>branchd login --token &lt;token&gt;</code>
-                  </p>
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="create-name">Name</Label>
+                <Input
+                  id="create-name"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder="John Doe"
+                  required
+                  disabled={creating}
+                />
+              </div>
 
-                <Button onClick={closeCreateDialog} className="w-full">
-                  Done
+              <div className="space-y-2">
+                <Label htmlFor="create-email">Email</Label>
+                <Input
+                  id="create-email"
+                  type="email"
+                  value={createEmail}
+                  onChange={(e) => setCreateEmail(e.target.value)}
+                  placeholder="john@example.com"
+                  required
+                  disabled={creating}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="create-password">Password</Label>
+                <Input
+                  id="create-password"
+                  type="password"
+                  value={createPassword}
+                  onChange={(e) => setCreatePassword(e.target.value)}
+                  placeholder="Enter password"
+                  required
+                  disabled={creating}
+                />
+                <p className="text-xs text-gray-500">
+                  Share these credentials with the user to log in via CLI or web
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  id="create-admin"
+                  type="checkbox"
+                  checked={createIsAdmin}
+                  onChange={(e) => setCreateIsAdmin(e.target.checked)}
+                  disabled={creating}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="create-admin" className="cursor-pointer">
+                  Admin user (can create users and manage all resources)
+                </Label>
+              </div>
+
+              <div className="flex gap-2">
+                <Button type="submit" disabled={creating} className="flex-1">
+                  {creating ? "Creating..." : "Create User"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closeCreateDialog}
+                  disabled={creating}
+                >
+                  Cancel
                 </Button>
               </div>
-            ) : (
-              <form onSubmit={handleCreateUser} className="space-y-4">
-                {createError && (
-                  <Alert variant="destructive">
-                    <AlertDescription>{createError}</AlertDescription>
-                  </Alert>
-                )}
-
-                <div className="space-y-2">
-                  <Label htmlFor="create-name">Name</Label>
-                  <Input
-                    id="create-name"
-                    value={createName}
-                    onChange={(e) => setCreateName(e.target.value)}
-                    placeholder="John Doe"
-                    required
-                    disabled={creating}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="create-email">Email</Label>
-                  <Input
-                    id="create-email"
-                    type="email"
-                    value={createEmail}
-                    onChange={(e) => setCreateEmail(e.target.value)}
-                    placeholder="john@example.com"
-                    required
-                    disabled={creating}
-                  />
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <input
-                    id="create-admin"
-                    type="checkbox"
-                    checked={createIsAdmin}
-                    onChange={(e) => setCreateIsAdmin(e.target.checked)}
-                    disabled={creating}
-                    className="h-4 w-4 rounded border-gray-300"
-                  />
-                  <Label htmlFor="create-admin" className="cursor-pointer">
-                    Admin user (can create users and manage all resources)
-                  </Label>
-                </div>
-
-                <div className="flex gap-2">
-                  <Button type="submit" disabled={creating} className="flex-1">
-                    {creating ? "Creating..." : "Create User"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={closeCreateDialog}
-                    disabled={creating}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-            )}
+            </form>
           </DialogContent>
         </Dialog>
       </div>

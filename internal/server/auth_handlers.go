@@ -16,7 +16,7 @@ import (
 // SetupRequest represents the first-run setup request
 type SetupRequest struct {
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8"`
+	Password string `json:"password" binding:"required"`
 	Name     string `json:"name" binding:"required"`
 }
 
@@ -43,15 +43,15 @@ type UserDetail struct {
 
 // CreateUserRequest represents a request to create a new user
 type CreateUserRequest struct {
-	Email   string `json:"email" binding:"required,email"`
-	Name    string `json:"name" binding:"required"`
-	IsAdmin bool   `json:"is_admin"`
+	Email    string `json:"email" binding:"required,email"`
+	Name     string `json:"name" binding:"required"`
+	Password string `json:"password" binding:"required"`
+	IsAdmin  bool   `json:"is_admin"`
 }
 
-// CreateUserResponse includes the generated token for the user
+// CreateUserResponse includes the created user details
 type CreateUserResponse struct {
-	User  *UserDetail `json:"user"`
-	Token string      `json:"token"`
+	User *UserDetail `json:"user"`
 }
 
 // @Summary First-run setup
@@ -274,7 +274,7 @@ func (s *Server) listUsers(c *gin.Context) {
 }
 
 // @Summary Create user
-// @Description Create a new user and return their JWT token (admin only)
+// @Description Create a new user (admin only)
 // @Tags users
 // @Accept json
 // @Produce json
@@ -292,9 +292,8 @@ func (s *Server) createUser(c *gin.Context) {
 		return
 	}
 
-	// Generate a random password (will be shared with admin to give to user, or user can use token directly)
-	randomPassword := generateRandomPassword(16)
-	passwordHash, err := auth.HashPassword(randomPassword)
+	// Hash the provided password
+	passwordHash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to hash password")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
@@ -315,14 +314,6 @@ func (s *Server) createUser(c *gin.Context) {
 		return
 	}
 
-	// Generate JWT token
-	token, err := auth.GenerateToken(user.ID, user.Email, user.IsAdmin)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Failed to generate token")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
-		return
-	}
-
 	sessionData, _ := GetSessionData(c)
 	s.logger.Info().
 		Str("user_id", user.ID).
@@ -338,7 +329,6 @@ func (s *Server) createUser(c *gin.Context) {
 			IsAdmin:   user.IsAdmin,
 			CreatedAt: user.CreatedAt,
 		},
-		Token: token,
 	})
 }
 
@@ -390,14 +380,4 @@ func (s *Server) deleteUser(c *gin.Context) {
 		Msg("User deleted")
 
 	c.Status(http.StatusNoContent)
-}
-
-// generateRandomPassword generates a random password
-func generateRandomPassword(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[i%len(charset)]
-	}
-	return string(b)
 }

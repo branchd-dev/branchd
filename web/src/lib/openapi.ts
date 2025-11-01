@@ -102,10 +102,10 @@ export interface InternalServerCreateUserRequest {
   email: string;
   is_admin?: boolean;
   name: string;
+  password: string;
 }
 
 export interface InternalServerCreateUserResponse {
-  token?: string;
   user?: InternalServerUserDetail;
 }
 
