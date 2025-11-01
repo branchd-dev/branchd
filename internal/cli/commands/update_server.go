@@ -12,11 +12,7 @@ import (
 func NewUpdateServerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update-server",
-		Short: "Update the Branchd server to the latest version",
-		Long: `Triggers a server update on all configured servers.
-
-The server will download the latest release, stop services, install new binaries,
-and restart automatically. This takes approximately 1 minute.`,
+		Short: "Update all branchd servers version",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpdateServer()
 		},

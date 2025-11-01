@@ -13,16 +13,15 @@ import (
 func NewSelectServerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "select-server [ip-or-alias]",
-		Short: "Select the default server to use for commands",
-		Long: `Select the default server to use for commands.
+		Short: "Select the server to use for commands",
+		Long: `Select the server to use for commands.
 
-If no IP or alias is provided, an interactive prompt will be shown.
-Otherwise, you can directly specify a server by its IP address or alias.
+If no param is provided, an interactive prompt will be shown.
 
 Examples:
-  branchd select-server              # Interactive selection
-  branchd select-server 192.168.1.1  # Select by IP
-  branchd select-server production   # Select by alias`,
+  $ branchd select-server              # Interactive selection
+  $ branchd select-server 192.168.1.1  # Select by IP
+  $ branchd select-server production   # Select by alias`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var ipOrAlias string

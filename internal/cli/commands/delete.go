@@ -41,7 +41,7 @@ func WithDeleteServer(server *config.Server) DeleteOption {
 func NewDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <branch-name>",
-		Short: "Delete a database branch",
+		Short: "Delete a branch",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDelete(args[0])

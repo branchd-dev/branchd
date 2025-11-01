@@ -59,7 +59,7 @@ func NewLoginCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Authenticate with a Branchd server",
+		Short: "Login to a branchd server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLogin(email, password)
 		},

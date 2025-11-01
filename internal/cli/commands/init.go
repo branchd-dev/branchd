@@ -28,7 +28,7 @@ func WithSkipBrowser(skip bool) InitOption {
 func NewInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init <ip-address>",
-		Short: "Init a new branchd server",
+		Short: "Setup a new branchd server",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runInit,
 	}

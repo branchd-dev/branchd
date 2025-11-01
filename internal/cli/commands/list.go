@@ -52,7 +52,7 @@ func NewListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "ls",
 		Aliases: []string{"list"},
-		Short:   "List all branches",
+		Short:   "List branches",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runList()
 		},

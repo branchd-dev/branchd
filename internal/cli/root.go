@@ -12,12 +12,8 @@ import (
 var version = "dev" // Will be set during build
 
 var rootCmd = &cobra.Command{
-	Use:   "branchd",
-	Short: "Branchd - Database branching for PostgreSQL",
-	Long: `Branchd CLI - Manage your database branches with ease.
-
-Branchd uses ZFS copy-on-write snapshots to create instant database branches
-for development, testing, and PR environments.`,
+	Use:           "branchd",
+	Short:         "PostgreSQL database branching",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -35,7 +31,7 @@ func init() {
 	// Add version command
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
-		Short: "Print the version number",
+		Short: "Show version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("branchd version %s\n", version)
 		},
