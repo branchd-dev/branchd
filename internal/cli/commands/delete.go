@@ -11,23 +11,19 @@ import (
 
 // NewDeleteCmd creates the delete command
 func NewDeleteCmd() *cobra.Command {
-	var serverAlias string
-
 	cmd := &cobra.Command{
 		Use:   "delete <branch-name>",
 		Short: "Delete a database branch",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDelete(args[0], serverAlias)
+			return runDelete(args[0])
 		},
 	}
-
-	cmd.Flags().StringVar(&serverAlias, "server", "", "Server alias (uses first server if not specified)")
 
 	return cmd
 }
 
-func runDelete(branchName, serverAlias string) error {
+func runDelete(branchName string) error {
 	// Load config
 	cfg, err := config.LoadFromCurrentDir()
 	if err != nil {
@@ -35,7 +31,7 @@ func runDelete(branchName, serverAlias string) error {
 	}
 
 	// Resolve which server to use
-	server, err := serverselect.ResolveServer(cfg, serverAlias)
+	server, err := serverselect.ResolveServer(cfg)
 	if err != nil {
 		return err
 	}

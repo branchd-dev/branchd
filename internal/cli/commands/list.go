@@ -13,23 +13,19 @@ import (
 
 // NewListCmd creates the list command
 func NewListCmd() *cobra.Command {
-	var serverAlias string
-
 	cmd := &cobra.Command{
 		Use:     "ls",
 		Aliases: []string{"list"},
 		Short:   "List all branches",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(serverAlias)
+			return runList()
 		},
 	}
-
-	cmd.Flags().StringVar(&serverAlias, "server", "", "Server alias (uses first server if not specified)")
 
 	return cmd
 }
 
-func runList(serverAlias string) error {
+func runList() error {
 	// Load config
 	cfg, err := config.LoadFromCurrentDir()
 	if err != nil {
@@ -37,7 +33,7 @@ func runList(serverAlias string) error {
 	}
 
 	// Resolve which server to use
-	server, err := serverselect.ResolveServer(cfg, serverAlias)
+	server, err := serverselect.ResolveServer(cfg)
 	if err != nil {
 		return err
 	}

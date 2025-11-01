@@ -9,21 +9,11 @@ import (
 )
 
 // ResolveServer determines which server to use based on the following priority:
-// 1. If serverAlias flag is provided, use that server
-// 2. If user has a selected server in their local config, use that
-// 3. If only one server in project config, use that
-// 4. Otherwise, prompt user to select a server interactively
-func ResolveServer(projectConfig *config.Config, serverAlias string) (*config.Server, error) {
-	// Priority 1: Use server alias if provided
-	if serverAlias != "" {
-		server, err := projectConfig.GetServerByAlias(serverAlias)
-		if err != nil {
-			return nil, err
-		}
-		return server, nil
-	}
-
-	// Priority 2: Use selected server from user config
+// 1. If user has a selected server in their local config, use that
+// 2. If only one server in project config, use that
+// 3. Otherwise, prompt user to select a server interactively
+func ResolveServer(projectConfig *config.Config) (*config.Server, error) {
+	// Priority 1: Use selected server from user config
 	selectedIP, err := userconfig.GetSelectedServer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load user config: %w", err)
@@ -40,7 +30,7 @@ func ResolveServer(projectConfig *config.Config, serverAlias string) (*config.Se
 		}
 	}
 
-	// Priority 3: If only one server, use it automatically
+	// Priority 2: If only one server, use it automatically
 	if len(projectConfig.Servers) == 1 {
 		server := &projectConfig.Servers[0]
 		// Save it as the selected server
@@ -51,7 +41,7 @@ func ResolveServer(projectConfig *config.Config, serverAlias string) (*config.Se
 		return server, nil
 	}
 
-	// Priority 4: Prompt user to select a server
+	// Priority 3: Prompt user to select a server
 	server, err := PromptServerSelection(projectConfig)
 	if err != nil {
 		return nil, err

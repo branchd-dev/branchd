@@ -11,23 +11,19 @@ import (
 
 // NewCheckoutCmd creates the checkout command
 func NewCheckoutCmd() *cobra.Command {
-	var serverAlias string
-
 	cmd := &cobra.Command{
 		Use:   "checkout <branch-name>",
 		Short: "Create a new database branch",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCheckout(args[0], serverAlias)
+			return runCheckout(args[0])
 		},
 	}
-
-	cmd.Flags().StringVar(&serverAlias, "server", "", "Server alias (uses first server if not specified)")
 
 	return cmd
 }
 
-func runCheckout(branchName, serverAlias string) error {
+func runCheckout(branchName string) error {
 	// Load config
 	cfg, err := config.LoadFromCurrentDir()
 	if err != nil {
@@ -35,7 +31,7 @@ func runCheckout(branchName, serverAlias string) error {
 	}
 
 	// Resolve which server to use
-	server, err := serverselect.ResolveServer(cfg, serverAlias)
+	server, err := serverselect.ResolveServer(cfg)
 	if err != nil {
 		return err
 	}

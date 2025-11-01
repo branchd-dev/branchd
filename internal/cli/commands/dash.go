@@ -12,22 +12,18 @@ import (
 
 // NewDashCmd creates the dash command
 func NewDashCmd() *cobra.Command {
-	var serverAlias string
-
 	cmd := &cobra.Command{
 		Use:   "dash",
 		Short: "Open the web dashboard in browser",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDash(serverAlias)
+			return runDash()
 		},
 	}
-
-	cmd.Flags().StringVar(&serverAlias, "server", "", "Server alias (uses first server if not specified)")
 
 	return cmd
 }
 
-func runDash(serverAlias string) error {
+func runDash() error {
 	// Load config
 	cfg, err := config.LoadFromCurrentDir()
 	if err != nil {
@@ -35,7 +31,7 @@ func runDash(serverAlias string) error {
 	}
 
 	// Resolve which server to use
-	server, err := serverselect.ResolveServer(cfg, serverAlias)
+	server, err := serverselect.ResolveServer(cfg)
 	if err != nil {
 		return err
 	}

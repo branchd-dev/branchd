@@ -11,30 +11,30 @@ import (
 	"github.com/branchd-dev/branchd/internal/cli/auth"
 	"github.com/branchd-dev/branchd/internal/cli/client"
 	"github.com/branchd-dev/branchd/internal/cli/config"
+	"github.com/branchd-dev/branchd/internal/cli/serverselect"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 // NewLoginCmd creates the login command
 func NewLoginCmd() *cobra.Command {
-	var email, password, serverAlias string
+	var email, password string
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with a Branchd server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLogin(email, password, serverAlias)
+			return runLogin(email, password)
 		},
 	}
 
 	cmd.Flags().StringVar(&email, "email", "", "Email address (or set BRANCHD_EMAIL)")
 	cmd.Flags().StringVar(&password, "password", "", "Password (or set BRANCHD_PASSWORD, will prompt if not provided)")
-	cmd.Flags().StringVar(&serverAlias, "server", "", "Server alias (uses first server if not specified)")
 
 	return cmd
 }
 
-func runLogin(email, password, serverAlias string) error {
+func runLogin(email, password string) error {
 	// Check for environment variables (useful for CI/CD)
 	if email == "" {
 		email = os.Getenv("BRANCHD_EMAIL")
@@ -54,18 +54,10 @@ func runLogin(email, password, serverAlias string) error {
 		return fmt.Errorf("failed to load config: %w\nRun 'branchd init' to create a configuration file", err)
 	}
 
-	// Get server
-	var server *config.Server
-	if serverAlias != "" {
-		server, err = cfg.GetServerByAlias(serverAlias)
-		if err != nil {
-			return err
-		}
-	} else {
-		server, err = cfg.GetDefaultServer()
-		if err != nil {
-			return err
-		}
+	// Resolve which server to use (respects selected server from select-server command)
+	server, err := serverselect.ResolveServer(cfg)
+	if err != nil {
+		return err
 	}
 
 	if server.IP == "" {
