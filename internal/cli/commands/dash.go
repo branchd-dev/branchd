@@ -5,8 +5,6 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/branchd-dev/branchd/internal/cli/config"
-	"github.com/branchd-dev/branchd/internal/cli/serverselect"
 	"github.com/spf13/cobra"
 )
 
@@ -24,20 +22,10 @@ func NewDashCmd() *cobra.Command {
 }
 
 func runDash() error {
-	// Load config
-	cfg, err := config.LoadFromCurrentDir()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w\nRun 'branchd init' to create a configuration file", err)
-	}
-
-	// Resolve which server to use
-	server, err := serverselect.ResolveServer(cfg)
+	// Get selected server
+	server, err := getSelectedServer()
 	if err != nil {
 		return err
-	}
-
-	if server.IP == "" {
-		return fmt.Errorf("server IP is empty. Please edit branchd.json and add a valid IP address")
 	}
 
 	// Build dashboard URL (Caddy serves HTTPS on port 443)

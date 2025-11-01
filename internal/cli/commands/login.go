@@ -1,20 +1,57 @@
 package commands
 
 import (
-	"crypto/tls"
 	"fmt"
-	"net/http"
 	"os"
 
 	"syscall"
 
-	"github.com/branchd-dev/branchd/internal/cli/auth"
 	"github.com/branchd-dev/branchd/internal/cli/client"
 	"github.com/branchd-dev/branchd/internal/cli/config"
-	"github.com/branchd-dev/branchd/internal/cli/serverselect"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
+
+// LoginClient defines the interface for API login operations
+type LoginClient interface {
+	Login(email, password string) (*client.LoginResponse, error)
+}
+
+// LoginTokenStore defines the interface for token storage
+type LoginTokenStore interface {
+	SaveToken(serverIP, token string) error
+}
+
+// loginOptions allows dependency injection for testing
+type loginOptions struct {
+	apiClient  LoginClient
+	tokenStore LoginTokenStore
+	server     *config.Server
+}
+
+// LoginOption is a function that configures loginOptions
+type LoginOption func(*loginOptions)
+
+// WithAPIClient injects a custom API client (for testing)
+func WithAPIClient(client LoginClient) LoginOption {
+	return func(opts *loginOptions) {
+		opts.apiClient = client
+	}
+}
+
+// WithTokenStore injects a custom token store (for testing)
+func WithTokenStore(store LoginTokenStore) LoginOption {
+	return func(opts *loginOptions) {
+		opts.tokenStore = store
+	}
+}
+
+// WithServer injects a specific server (for testing)
+func WithServer(server *config.Server) LoginOption {
+	return func(opts *loginOptions) {
+		opts.server = server
+	}
+}
 
 // NewLoginCmd creates the login command
 func NewLoginCmd() *cobra.Command {
@@ -34,7 +71,16 @@ func NewLoginCmd() *cobra.Command {
 	return cmd
 }
 
-func runLogin(email, password string) error {
+func runLogin(email, password string, opts ...LoginOption) error {
+	return runLoginWithOptions(email, password, opts...)
+}
+
+func runLoginWithOptions(email, password string, opts ...LoginOption) error {
+	// Apply options
+	options := &loginOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 	// Check for environment variables (useful for CI/CD)
 	if email == "" {
 		email = os.Getenv("BRANCHD_EMAIL")
@@ -48,20 +94,16 @@ func runLogin(email, password string) error {
 		return fmt.Errorf("email is required (use --email flag or BRANCHD_EMAIL env var)")
 	}
 
-	// Load config
-	cfg, err := config.LoadFromCurrentDir()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w\nRun 'branchd init' to create a configuration file", err)
-	}
-
-	// Resolve which server to use (respects selected server from select-server command)
-	server, err := serverselect.ResolveServer(cfg)
-	if err != nil {
-		return err
-	}
-
-	if server.IP == "" {
-		return fmt.Errorf("server IP is empty. Please edit branchd.json and add a valid IP address")
+	// Get selected server (unless injected for testing)
+	var server *config.Server
+	var err error
+	if options.server != nil {
+		server = options.server
+	} else {
+		server, err = getSelectedServer()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Prompt for password if not provided via flag or env var
@@ -80,18 +122,21 @@ func runLogin(email, password string) error {
 		}
 	}
 
-	// Create HTTP client that accepts self-signed certificates
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Accept self-signed certificates
-			},
-		},
+	// Create API client (or use injected one for testing)
+	var apiClient LoginClient
+	if options.apiClient != nil {
+		apiClient = options.apiClient
+	} else {
+		apiClient = client.New(server.IP)
 	}
 
-	// Create API client with custom HTTP client
-	apiClient := client.New(server.IP)
-	apiClient.SetHTTPClient(httpClient)
+	// Create token store (or use injected one for testing)
+	var tokenStore LoginTokenStore
+	if options.tokenStore != nil {
+		tokenStore = options.tokenStore
+	} else {
+		tokenStore = &defaultTokenStore{}
+	}
 
 	// Attempt login
 	fmt.Printf("Logging in to %s (%s)...\n", server.Alias, server.IP)
@@ -102,7 +147,7 @@ func runLogin(email, password string) error {
 	}
 
 	// Save token
-	if err := auth.SaveToken(server.IP, loginResp.Token); err != nil {
+	if err := tokenStore.SaveToken(server.IP, loginResp.Token); err != nil {
 		return fmt.Errorf("failed to save authentication token: %w", err)
 	}
 
