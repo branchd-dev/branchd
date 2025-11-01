@@ -1,6 +1,6 @@
 # Branchd
 
-Branchd is a free PostgreSQL database branching tool that you can self-host (currently only on AWS).
+Branchd is a free PostgreSQL database branching tool that you can self-host anywhere.
 
 - **Great DX** - includes an admin web UI and the branchd CLI for managing branches
 - **Instant branches** - Create full database clones in seconds
@@ -29,6 +29,12 @@ The [Cloudformation template](cloudformation/branchd.yaml) and [server setup scr
 - **Firewall** - UFW enabled
 - **Intrusion Detection** - fail2ban for PostgreSQL ports
 - **Auto-updates** - Unattended security updates (VM restarts on Sundays at 3 AM UTC)
+
+## Self-hosting
+
+Branchd currently has a Cloudformation template to make it easy for you to self-host on AWS.
+
+However, it can be hosted anywhere with a few adjustments. If you need help with that, file an issue or shoot an email via the support link in https://branchd.dev/.
 
 ## License
 
