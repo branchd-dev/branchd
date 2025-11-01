@@ -210,9 +210,9 @@ export function SettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Alert className="bg-blue-50 border-blue-200">
-              <Info className="h-4 w-4" />
-              <AlertDescription className="text-sm">
+            <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-950/50 dark:border-blue-800">
+              <Info className="h-4 w-4 dark:text-blue-400" />
+              <AlertDescription className="text-sm dark:text-blue-200">
                 Your connection string is stored in the VM's SQLite and is
                 secured by the EBS volume encryption.
               </AlertDescription>
@@ -220,13 +220,13 @@ export function SettingsPage() {
 
             {/* Display detected database info */}
             {systemInfo?.source_database?.connected && (
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-1">
-                <p className="text-sm">
-                  <span className="font-medium">Detected version:</span>{" "}
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-1 dark:bg-gray-900 dark:border-gray-700">
+                <p className="text-sm dark:text-gray-300">
+                  <span className="font-medium dark:text-gray-200">Detected version:</span>{" "}
                   {systemInfo.source_database.version || "Unknown"}
                 </p>
-                <p className="text-sm">
-                  <span className="font-medium">Detected database size:</span>{" "}
+                <p className="text-sm dark:text-gray-300">
+                  <span className="font-medium dark:text-gray-200">Detected database size:</span>{" "}
                   {systemInfo.source_database.size_gb?.toFixed(2) || "0"} GB
                 </p>
               </div>
@@ -366,19 +366,19 @@ export function SettingsPage() {
                     const isDanger = usagePercent > 100;
 
                     return (
-                      <div className="space-y-3 mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                      <div className="space-y-3 mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg dark:bg-gray-900 dark:border-gray-700">
                         <div className="space-y-2">
                           <div className="flex justify-between items-center text-sm">
-                            <span className="font-medium text-gray-700">
+                            <span className="font-medium text-gray-700 dark:text-gray-300">
                               Estimated Storage Usage
                             </span>
                             <span
                               className={`font-semibold ${
                                 isDanger
-                                  ? "text-red-600"
+                                  ? "text-red-600 dark:text-red-400"
                                   : isWarning
-                                    ? "text-yellow-600"
-                                    : "text-green-600"
+                                    ? "text-yellow-600 dark:text-yellow-400"
+                                    : "text-green-600 dark:text-green-400"
                               }`}
                             >
                               {requiredGB.toFixed(2)} / {availableGB.toFixed(2)}{" "}
@@ -395,7 +395,7 @@ export function SettingsPage() {
                                   : "[&>div]:bg-green-500"
                             }`}
                           />
-                          <p className="text-xs text-gray-500">
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
                             {systemInfo.source_database.size_gb.toFixed(2)} GB
                             per restore × {maxRestores} restore
                             {maxRestores === 1 ? "" : "s"}
@@ -412,7 +412,7 @@ export function SettingsPage() {
                           </Alert>
                         )}
 
-                        <p className="text-xs text-gray-500 italic">
+                        <p className="text-xs text-gray-500 dark:text-gray-400 italic">
                           Note: This is an estimate. Actual storage usage may be
                           lower due to compression.
                         </p>
@@ -496,8 +496,8 @@ export function SettingsPage() {
             )}
 
             {domain && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                <p className="text-sm text-amber-800">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 dark:bg-amber-950/50 dark:border-amber-800">
+                <p className="text-sm text-amber-800 dark:text-amber-200">
                   <strong>Note:</strong> Ensure your domain's DNS A record
                   points to this server's IP address before saving. Let's
                   Encrypt will verify domain ownership before issuing the
