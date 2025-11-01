@@ -9,6 +9,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// initOptions allows dependency injection for testing
+type initOptions struct {
+	skipBrowser bool
+}
+
+// InitOption is a function that configures initOptions
+type InitOption func(*initOptions)
+
+// WithSkipBrowser skips opening the browser (for testing)
+func WithSkipBrowser(skip bool) InitOption {
+	return func(opts *initOptions) {
+		opts.skipBrowser = skip
+	}
+}
+
 // NewInitCmd creates the init command
 func NewInitCmd() *cobra.Command {
 	return &cobra.Command{
@@ -20,6 +35,14 @@ func NewInitCmd() *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
+	return runInitWithOptions(args, nil)
+}
+
+func runInitWithOptions(args []string, opts *initOptions) error {
+	if opts == nil {
+		opts = &initOptions{}
+	}
+
 	ipAddress := args[0]
 
 	currentDir, err := os.Getwd()
@@ -61,12 +84,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Server with IP %s already exists in branchd.json\n", ipAddress)
 	} else {
 		// Add new server
-		alias := ipAddress
-		if len(cfg.Servers) == 0 {
-			alias = "production"
-		} else {
-			alias = fmt.Sprintf("server-%d", len(cfg.Servers)+1)
-		}
+		alias := fmt.Sprintf("server-%d", len(cfg.Servers)+1)
 
 		cfg.Servers = append(cfg.Servers, config.Server{
 			IP:    ipAddress,
@@ -85,13 +103,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Open browser to setup page
-	setupURL := fmt.Sprintf("https://%s/setup", ipAddress)
-	fmt.Printf("\nOpening setup page at %s...\n", setupURL)
+	// Open browser to setup page (unless skipped for testing)
+	if !opts.skipBrowser {
+		setupURL := fmt.Sprintf("https://%s/setup", ipAddress)
+		fmt.Printf("\nOpening setup page at %s...\n", setupURL)
 
-	if err := openBrowser(setupURL); err != nil {
-		fmt.Printf("⚠ Could not open browser automatically: %v\n", err)
-		fmt.Printf("Please visit: %s\n", setupURL)
+		if err := openBrowser(setupURL); err != nil {
+			fmt.Printf("⚠ Could not open browser automatically: %v\n", err)
+			fmt.Printf("Please visit: %s\n", setupURL)
+		}
 	}
 
 	fmt.Println("\nNext steps:")
