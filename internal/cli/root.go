@@ -48,6 +48,7 @@ func init() {
 	rootCmd.AddCommand(commands.NewDeleteCmd())
 	rootCmd.AddCommand(commands.NewListCmd())
 	rootCmd.AddCommand(commands.NewDashCmd())
+	rootCmd.AddCommand(commands.NewSelectServerCmd())
 	rootCmd.AddCommand(commands.NewUpdateCmd(version))
 	rootCmd.AddCommand(commands.NewUpdateServerCmd())
 }

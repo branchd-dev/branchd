@@ -7,6 +7,7 @@ import (
 
 	"github.com/branchd-dev/branchd/internal/cli/client"
 	"github.com/branchd-dev/branchd/internal/cli/config"
+	"github.com/branchd-dev/branchd/internal/cli/serverselect"
 	"github.com/spf13/cobra"
 )
 
@@ -35,18 +36,10 @@ func runList(serverAlias string) error {
 		return fmt.Errorf("failed to load config: %w\nRun 'branchd init' to create a configuration file", err)
 	}
 
-	// Get server
-	var server *config.Server
-	if serverAlias != "" {
-		server, err = cfg.GetServerByAlias(serverAlias)
-		if err != nil {
-			return err
-		}
-	} else {
-		server, err = cfg.GetDefaultServer()
-		if err != nil {
-			return err
-		}
+	// Resolve which server to use
+	server, err := serverselect.ResolveServer(cfg, serverAlias)
+	if err != nil {
+		return err
 	}
 
 	if server.IP == "" {
