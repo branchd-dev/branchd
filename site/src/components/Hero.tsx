@@ -18,7 +18,7 @@ export function Hero() {
                 Open Source
               </span>
               <span className="inline-flex items-center rounded-full bg-zinc-800 px-3 py-1 text-sm font-medium text-zinc-300 ring-1 ring-zinc-700 ring-inset">
-                Self-Hosted
+                Self-host in 5 minutes
               </span>
             </div>
             <h1 className="max-w-2xl font-display text-3xl font-medium tracking-tight text-white sm:text-5xl">
@@ -75,7 +75,7 @@ export function Hero() {
               </div>
             </div>
             {/* Decorative gradient blur */}
-            <div className="absolute -inset-4 -z-10 bg-gradient-to-r from-violet-600/20 to-indigo-600/20 blur-3xl opacity-30" />
+            <div className="absolute -inset-4 -z-10 bg-gradient-to-r from-violet-600/20 to-indigo-600/20 opacity-30 blur-3xl" />
           </div>
         </div>
       </Container>
