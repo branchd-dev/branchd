@@ -85,6 +85,12 @@ start_async_restore() {
 
         die() {
             log \"ERROR: \$1\" >&2
+
+            log \"Restoring PostgreSQL settings after failure...\"
+            sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"ALTER SYSTEM RESET fsync\" 2>/dev/null || true
+            sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"ALTER SYSTEM RESET maintenance_work_mem\" 2>/dev/null || true
+            sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"SELECT pg_reload_conf()\" 2>/dev/null || true
+
             # Write failure marker directly to log file (bypasses stdout buffering)
             echo '__BRANCHD_RESTORE_FAILED__' >> \"${RESTORE_LOG}\"
             sync
@@ -110,41 +116,37 @@ start_async_restore() {
             log \"Database already exists, continuing...\"
         fi
 
-        # 3. Pipe pg_dump directly to psql (no intermediate file)
+        log \"Applying performance optimizations...\"
+        sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"ALTER SYSTEM SET fsync = off\" 2>&1 || log \"Warning: Could not disable fsync\"
+        sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"ALTER SYSTEM SET maintenance_work_mem = '1GB'\" 2>&1 || log \"Warning: Could not set maintenance_work_mem\"
+        sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"SELECT pg_reload_conf()\" 2>&1 || log \"Warning: Could not reload config\"
+
         log \"Starting restore [schema_only=${SCHEMA_ONLY}]...\"
-
-        # Build dump flags for plain SQL output
-        DUMP_FLAGS=\"--no-owner --no-acl --no-comments --verbose\"
-
+        DUMP_FLAGS=\"--no-owner --no-acl --no-comments --verbose --no-sync\"
         if [ \"${SCHEMA_ONLY}\" = \"true\" ]; then
             DUMP_FLAGS=\"\${DUMP_FLAGS} --schema-only\"
         fi
 
         # Pipe pg_dump directly to psql
         # We use ON_ERROR_STOP=0 to continue past non-fatal errors like missing extensions
-        # This allows restores from managed services (like Crunchy Bridge) that have
-        # proprietary extensions which aren't available on vanilla PostgreSQL
-        set +e  # Temporarily allow errors to check pipe status
+        # This allows restores from managed services that have proprietary extensions
+        set +e
         sudo -u postgres bash -c \"\${PG_BIN}/pg_dump \\\"${CONNECTION_STRING}\\\" \${DUMP_FLAGS} | \${PG_BIN}/psql -p ${PG_PORT} -d \\\"${DATABASE_NAME}\\\" -v ON_ERROR_STOP=0\" 2>&1
         PIPE_EXIT_CODE=\$?
-        set -e  # Re-enable exit on error
+        set -e
 
         # Log the exit code for debugging
         log \"Restore completed with exit code \$PIPE_EXIT_CODE\"
 
-        # Only fail on truly fatal errors (typically exit code > 3)
-        # Exit code 0 = success
-        # Exit code 1-3 = non-fatal errors (missing extensions, duplicate objects, etc.)
-        # We'll verify database health in the next step rather than relying solely on exit code
+        # Only fail on truly fatal errors
         if [ \$PIPE_EXIT_CODE -gt 3 ]; then
             die \"pg_dump | psql piped restore failed with fatal exit code \$PIPE_EXIT_CODE\"
         fi
 
         if [ \$PIPE_EXIT_CODE -ne 0 ]; then
-            log \"Restore completed with warnings (non-fatal errors like missing extensions ignored)\"
+            log \"Restore completed with warnings\"
         fi
 
-        # 4. Verify PostgreSQL is still accepting connections after restore
         log \"Verifying PostgreSQL is accepting connections after restore...\"
         MAX_RETRIES=10
         RETRY_COUNT=0
@@ -161,13 +163,18 @@ start_async_restore() {
             sleep 1
         done
 
+        log \"Resetting performance optimizations...\"
+        sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"ALTER SYSTEM RESET fsync\" 2>&1 || log \"Warning: Could not reset fsync\"
+        sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"ALTER SYSTEM RESET maintenance_work_mem\" 2>&1 || log \"Warning: Could not reset maintenance_work_mem\"
+        sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"SELECT pg_reload_conf()\" 2>&1 || log \"Warning: Could not reload config\"
+
         log \"PostgreSQL database restore completed successfully [schema_only=${SCHEMA_ONLY}]\"
 
         # Write success marker directly to log file (bypasses stdout buffering)
         # This ensures the marker is on disk before we remove the PID file
         echo '__BRANCHD_RESTORE_SUCCESS__' >> \"${RESTORE_LOG}\"
 
-        # Force filesystem sync and give it a moment to complete
+        # Force filesystem sync
         sync
         sleep 0.5
 
