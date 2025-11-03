@@ -138,7 +138,7 @@ start_async_restore() {
         sudo -u postgres bash -c \"
             set +e
             \${PG_BIN}/pg_dump \\\"${CONNECTION_STRING}\\\" \${DUMP_FLAGS} | \${PG_BIN}/psql -p ${PG_PORT} -d \\\"${DATABASE_NAME}\\\" -v ON_ERROR_STOP=0
-            echo \\\${PIPESTATUS[0]}:\\\${PIPESTATUS[1]} > ${EXIT_CODES_FILE}
+            echo \\\${PIPESTATUS[0]}:\\\${PIPESTATUS[1]} > \$EXIT_CODES_FILE
         \" 2>&1
         set -e
 
