@@ -466,10 +466,14 @@ EOF
 # Restart journald to apply new settings
 sudo systemctl restart systemd-journald
 
-# Force an immediate rotation and cleanup
+# Force an immediate rotation and cleanup (non-fatal if files are in use)
 echo "Running initial log rotation..."
-sudo logrotate -f /etc/logrotate.d/branchd-system
-sudo logrotate -f /etc/logrotate.d/branchd-restore || true
+if ! sudo logrotate -f /etc/logrotate.d/branchd-system 2>/dev/null; then
+    echo "  (Skipped system logs - files in use, will rotate on next schedule)"
+fi
+if ! sudo logrotate -f /etc/logrotate.d/branchd-restore 2>/dev/null; then
+    echo "  (Skipped restore logs - not present yet)"
+fi
 
 # Verify configurations
 echo "Verifying log rotation configuration..."
