@@ -13,7 +13,6 @@ readonly SCHEMA_ONLY="{{.SchemaOnly}}" # "true" or "false"
 
 # Paths
 readonly MOUNTPATH="/opt/branchd/pg${PG_VERSION}/main"
-readonly DUMP_FILE="/tmp/branchd-dump-${DATABASE_NAME}-$(date +%s).pgdump"
 readonly RESTORE_LOG_DIR="/var/log/branchd"
 readonly RESTORE_LOG="${RESTORE_LOG_DIR}/restore-${DATABASE_NAME}.log"
 readonly RESTORE_PID="${RESTORE_LOG_DIR}/restore-${DATABASE_NAME}.pid"
@@ -71,7 +70,7 @@ exit_if_restore_in_progress() {
 }
 
 start_async_restore() {
-    log "Starting pg_dump/restore process..."
+    log "Starting restore process..."
 
     # Create the restore script that runs asynchronously
     local restore_script="
@@ -95,38 +94,13 @@ start_async_restore() {
             exit 1
         }
 
-        # 1. Dump from source database
-        log \"Dumping database from source [schema_only=${SCHEMA_ONLY}]...\"
-
-        # Build dump flags
-        DUMP_FLAGS=\"--format=custom --file=${DUMP_FILE} --verbose --no-comments\"
-
-        # Set compression based on PostgreSQL version
-        # lz4: PG 15+ - much faster compression/decompression, similar ratio
-        # gzip level 1: PG 14 - fast with good compression ratio
-        if [ ${PG_VERSION} -ge 15 ]; then
-            DUMP_FLAGS=\"\${DUMP_FLAGS} --compress=lz4\"
-        else
-            DUMP_FLAGS=\"\${DUMP_FLAGS} --compress=1\"
-        fi
-
-        if [ \"${SCHEMA_ONLY}\" = \"true\" ]; then
-            DUMP_FLAGS=\"\${DUMP_FLAGS} --schema-only\"
-        fi
-
-        if ! sudo -u postgres \${PG_BIN}/pg_dump \"${CONNECTION_STRING}\" \${DUMP_FLAGS} 2>&1; then
-            die \"pg_dump failed\"
-        fi
-
-        log \"Dump completed: \$(du -h ${DUMP_FILE} | cut -f1)\"
-
-        # 2. Verify PostgreSQL is running on correct port
+        # 1. Verify PostgreSQL is running on correct port
         log \"Verifying PostgreSQL is running on port ${PG_PORT}...\"
         if ! sudo -u postgres \${PG_BIN}/pg_isready -p ${PG_PORT} >/dev/null 2>&1; then
             die \"PostgreSQL is not running on port ${PG_PORT}\"
         fi
 
-        # 3. Create target database
+        # 2. Create target database
         log \"Creating target database...\"
         if ! sudo -u postgres \${PG_BIN}/psql -p ${PG_PORT} -c \"CREATE DATABASE \\\"${DATABASE_NAME}\\\"\" 2>&1; then
             # Database might already exist, check if that's the error
@@ -136,35 +110,31 @@ start_async_restore() {
             log \"Database already exists, continuing...\"
         fi
 
-        # 4. Restore dump
-        log \"Restoring database from dump...\"
-        set +e  # Temporarily allow errors - pg_restore may have non-fatal warnings
-        sudo -u postgres \${PG_BIN}/pg_restore \\
-            --dbname=\"${DATABASE_NAME}\" \\
-            --port=${PG_PORT} \\
-            --no-owner \\
-            --no-acl \\
-            --no-comments \\
-            --verbose \\
-            \"${DUMP_FILE}\" 2>&1
-        RESTORE_EXIT_CODE=\$?
+        # 3. Pipe pg_dump directly to psql (no intermediate file)
+        log \"Starting restore [schema_only=${SCHEMA_ONLY}]...\"
+
+        # Build dump flags for plain SQL output
+        DUMP_FLAGS=\"--no-owner --no-acl --no-comments --verbose\"
+
+        if [ \"${SCHEMA_ONLY}\" = \"true\" ]; then
+            DUMP_FLAGS=\"\${DUMP_FLAGS} --schema-only\"
+        fi
+
+        # Pipe pg_dump directly to psql
+        # Exit codes: pg_dump uses PIPESTATUS[0], psql uses PIPESTATUS[1]
+        set +e  # Temporarily allow errors to check both pipe statuses
+        sudo -u postgres bash -c \"\${PG_BIN}/pg_dump \\\"${CONNECTION_STRING}\\\" \${DUMP_FLAGS} | \${PG_BIN}/psql -p ${PG_PORT} -d \\\"${DATABASE_NAME}\\\" -v ON_ERROR_STOP=1\" 2>&1
+        PIPE_EXIT_CODE=\$?
         set -e  # Re-enable exit on error
 
-        # Check if restore had fatal errors (exit code 0 or 1 are acceptable)
-        # Exit code 1 usually means \"some errors but restore completed\"
-        if [ \$RESTORE_EXIT_CODE -gt 1 ]; then
-            die \"pg_restore failed with exit code \$RESTORE_EXIT_CODE\"
+        # Check if piped operation had fatal errors
+        if [ \$PIPE_EXIT_CODE -ne 0 ]; then
+            die \"pg_dump | psql piped restore failed with exit code \$PIPE_EXIT_CODE\"
         fi
 
-        if [ \$RESTORE_EXIT_CODE -eq 1 ]; then
-            log \"pg_restore completed with warnings (non-fatal errors ignored)\"
-        fi
+        log \"Piped restore completed successfully\"
 
-        # 5. Cleanup
-        log \"Cleaning up dump file...\"
-        sudo rm -f \"${DUMP_FILE}\" || log \"Warning: Could not remove dump file (may not exist)\"
-
-        # 6. Verify PostgreSQL is still accepting connections after restore
+        # 4. Verify PostgreSQL is still accepting connections after restore
         log \"Verifying PostgreSQL is accepting connections after restore...\"
         MAX_RETRIES=10
         RETRY_COUNT=0
@@ -207,7 +177,7 @@ NESTED_SCRIPT
         die "Failed to write PID file"
     fi
 
-    log "pg_dump/restore started asynchronously"
+    log "pg_dump/restore started asynchronously (piped mode - no disk space needed)"
     log "Monitor progress with: tail -f ${RESTORE_LOG}"
 }
 
