@@ -1,7 +1,11 @@
 package server
 
 import (
+	"bufio"
+	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -172,5 +176,96 @@ func (s *Server) triggerRestore(c *gin.Context) {
 		"message":    "Restore triggered successfully",
 		"restore_id": restore.ID,
 		"task_id":    taskInfo.ID,
+	})
+}
+
+// @Summary Get restore logs
+// @Description Get logs for a specific restore
+// @Tags restores
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Restore ID"
+// @Param lines query int false "Number of lines to fetch (default: 50)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/restores/{id}/logs [get]
+func (s *Server) getRestoreLogs(c *gin.Context) {
+	restoreID := c.Param("id")
+
+	// Get lines parameter (default to 50)
+	lines := 50
+	if linesStr := c.Query("lines"); linesStr != "" {
+		if l, err := strconv.Atoi(linesStr); err == nil && l > 0 && l <= 1000 {
+			lines = l
+		}
+	}
+
+	// Find restore
+	var restore models.Restore
+	if err := s.db.Where("id = ?", restoreID).First(&restore).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Restore not found"})
+			return
+		}
+		s.logger.Error().Err(err).Str("restore_id", restoreID).Msg("Failed to find restore")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	// Construct log file path
+	logPath := fmt.Sprintf("/var/log/branchd/restore-%s.log", restore.Name)
+
+	// Check if log file exists
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		c.JSON(http.StatusOK, gin.H{
+			"logs":        []string{},
+			"total_lines": 0,
+			"exists":      false,
+		})
+		return
+	}
+
+	// Read log file
+	file, err := os.Open(logPath)
+	if err != nil {
+		s.logger.Error().Err(err).Str("log_path", logPath).Msg("Failed to open log file")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read log file"})
+		return
+	}
+	defer file.Close()
+
+	// Read all lines into a slice
+	var allLines []string
+	scanner := bufio.NewScanner(file)
+	// Increase buffer size for long log lines
+	const maxCapacity = 1024 * 1024 // 1MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	for scanner.Scan() {
+		allLines = append(allLines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		s.logger.Error().Err(err).Str("log_path", logPath).Msg("Failed to read log file")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read log file"})
+		return
+	}
+
+	totalLines := len(allLines)
+
+	// Get last N lines
+	var logLines []string
+	if totalLines <= lines {
+		logLines = allLines
+	} else {
+		logLines = allLines[totalLines-lines:]
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"logs":        logLines,
+		"total_lines": totalLines,
+		"exists":      true,
 	})
 }

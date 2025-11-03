@@ -566,6 +566,22 @@ export class Api<
         ...params,
       }),
 
+    restoresLogsList: (
+      id: string,
+      query?: {
+        lines?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<Record<string, any>, Record<string, any>>({
+        path: `/api/restores/${id}/logs`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
     setupCreate: (
       request: InternalServerSetupRequest,
       params: RequestParams = {},

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useApi } from "../hooks/use-api";
 import type {
   GithubComBranchdDevBranchdInternalModelsRestore,
@@ -42,6 +42,7 @@ import {
   Globe,
   Clock,
   RotateCw,
+  FileText,
 } from "lucide-react";
 import {
   Card,
@@ -98,6 +99,15 @@ export function DashboardPage() {
   const [deleteRestoreError, setDeleteRestoreError] = useState<string | null>(
     null,
   );
+
+  // Logs dialog state
+  const [logsDialogOpen, setLogsDialogOpen] = useState(false);
+  const [restoreForLogs, setRestoreForLogs] =
+    useState<GithubComBranchdDevBranchdInternalModelsRestore | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   const fetchData = async () => {
     try {
@@ -254,6 +264,60 @@ export function DashboardPage() {
       setDeletingRestore(false);
     }
   };
+
+  const fetchLogs = async (restoreId: string) => {
+    try {
+      setLogsLoading(true);
+      setLogsError(null);
+
+      const response = await api.api.restoresLogsList(
+        restoreId,
+        {
+          lines: 50,
+        },
+        {}
+      );
+      const data = await response.json();
+
+      if (data.logs) {
+        setLogs(data.logs);
+      }
+    } catch (err: any) {
+      setLogsError(err.error?.error || err.message || "Failed to fetch logs");
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const handleViewLogs = (restore: GithubComBranchdDevBranchdInternalModelsRestore) => {
+    setRestoreForLogs(restore);
+    setLogsDialogOpen(true);
+    setLogs([]);
+    setLogsError(null);
+    fetchLogs(restore.id!);
+  };
+
+  // Poll for logs when logs dialog is open
+  useEffect(() => {
+    if (!logsDialogOpen || !restoreForLogs) return;
+
+    // Fetch logs immediately
+    fetchLogs(restoreForLogs.id!);
+
+    // Then poll every 3 seconds
+    const interval = setInterval(() => {
+      fetchLogs(restoreForLogs.id!);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [logsDialogOpen, restoreForLogs]);
+
+  // Auto-scroll to bottom when logs change
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs]);
 
   if (loading && !config) {
     return (
@@ -537,7 +601,17 @@ export function DashboardPage() {
                 {restores.map((restore) => (
                   <TableRow key={restore.id}>
                     <TableCell className="font-mono text-sm">
-                      {restore.name}
+                      <div className="flex items-center gap-2">
+                        {restore.name}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewLogs(restore)}
+                          className="h-6 w-6 p-0"
+                        >
+                          <FileText className="h-4 w-4 text-gray-600" />
+                        </Button>
+                      </div>
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -817,6 +891,58 @@ export function DashboardPage() {
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               )}
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Logs Dialog */}
+      <Dialog open={logsDialogOpen} onOpenChange={setLogsDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Restore Logs - {restoreForLogs?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Showing the last 50 lines. Logs update every 3 seconds.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {logsError && (
+              <Alert variant="destructive">
+                <AlertDescription>{logsError}</AlertDescription>
+              </Alert>
+            )}
+
+            {logsLoading && logs.length === 0 ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+              </div>
+            ) : logs.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <FileText className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                <p>No logs available yet</p>
+              </div>
+            ) : (
+              <div className="bg-gray-900 text-gray-100 p-4 rounded-md font-mono text-xs overflow-auto max-h-[60vh]">
+                {logs.map((line, index) => (
+                  <div key={index} className="whitespace-pre-wrap break-all">
+                    {line}
+                  </div>
+                ))}
+                <div ref={logsEndRef} />
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setLogsDialogOpen(false)}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

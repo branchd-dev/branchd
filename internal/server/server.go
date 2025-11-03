@@ -257,6 +257,7 @@ func (s *Server) setupRouter() {
 		// Database management
 		api.GET("/restores", s.listRestores)
 		api.GET("/restores/:id", s.getRestore)
+		api.GET("/restores/:id/logs", s.getRestoreLogs)
 		api.DELETE("/restores/:id", s.deleteRestore)
 		api.POST("/restores/trigger-restore", s.triggerRestore)
 
