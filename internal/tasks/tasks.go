@@ -20,9 +20,9 @@ type TaskPayload struct {
 }
 
 // NewPgDumpRestoreExecuteTask creates a task to execute pg_dump/restore
-func NewPgDumpRestoreExecuteTask(databaseID string) (*asynq.Task, error) {
+func NewPgDumpRestoreExecuteTask(restoreID string) (*asynq.Task, error) {
 	payload, err := json.Marshal(TaskPayload{
-		RestoreID: databaseID,
+		RestoreID: restoreID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
@@ -31,9 +31,9 @@ func NewPgDumpRestoreExecuteTask(databaseID string) (*asynq.Task, error) {
 }
 
 // NewPgDumpRestoreWaitCompleteTask creates a task to wait for pg_dump/restore completion
-func NewPgDumpRestoreWaitCompleteTask(databaseID string) (*asynq.Task, error) {
+func NewPgDumpRestoreWaitCompleteTask(restoreID string) (*asynq.Task, error) {
 	payload, err := json.Marshal(TaskPayload{
-		RestoreID: databaseID,
+		RestoreID: restoreID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)

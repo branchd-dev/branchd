@@ -275,7 +275,7 @@ export function DashboardPage() {
         {
           lines: 50,
         },
-        {}
+        {},
       );
       const data = await response.json();
 
@@ -289,7 +289,9 @@ export function DashboardPage() {
     }
   };
 
-  const handleViewLogs = (restore: GithubComBranchdDevBranchdInternalModelsRestore) => {
+  const handleViewLogs = (
+    restore: GithubComBranchdDevBranchdInternalModelsRestore,
+  ) => {
     setRestoreForLogs(restore);
     setLogsDialogOpen(true);
     setLogs([]);
@@ -462,9 +464,14 @@ export function DashboardPage() {
                       {systemInfo?.source_database?.version?.replace(
                         "PostgreSQL ",
                         "",
-                      ) || config.postgres_version || "16"}
+                      ) ||
+                        config.postgres_version ||
+                        "16"}
                       {systemInfo?.source_database?.size_gb && (
-                        <> · {systemInfo.source_database.size_gb.toFixed(2)} GB</>
+                        <>
+                          {" "}
+                          · {systemInfo.source_database.size_gb.toFixed(2)} GB
+                        </>
                       )}
                       {systemInfo?.source_database?.connected !== undefined && (
                         <>
@@ -562,7 +569,8 @@ export function DashboardPage() {
             <div>
               <CardTitle>Restores</CardTitle>
               <CardDescription>
-                Restored database snapshots available for branching
+                Restores only become ready for branching after anon rules have
+                been applied
               </CardDescription>
             </div>
             <Button onClick={handleTriggerRestore} disabled={triggering}>
@@ -676,7 +684,7 @@ export function DashboardPage() {
                 Branches
               </CardTitle>
               <CardDescription>
-                Create isolated database branches for development
+                Branches are created from the latest ready restore
               </CardDescription>
             </div>
             <Button onClick={() => setCreateDialogOpen(true)}>
@@ -690,9 +698,6 @@ export function DashboardPage() {
             <div className="text-center py-8 text-gray-500">
               <GitBranch className="h-12 w-12 mx-auto mb-2 opacity-50" />
               <p>No branches yet</p>
-              <p className="text-sm mt-1">
-                Create your first branch to get started
-              </p>
             </div>
           ) : (
             <Table>
@@ -938,10 +943,7 @@ export function DashboardPage() {
           </div>
 
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setLogsDialogOpen(false)}
-            >
+            <Button variant="outline" onClick={() => setLogsDialogOpen(false)}>
               Close
             </Button>
           </DialogFooter>
