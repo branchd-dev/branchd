@@ -130,21 +130,44 @@ start_async_restore() {
         # Pipe pg_dump directly to psql
         # We use ON_ERROR_STOP=0 to continue past non-fatal errors like missing extensions
         # This allows restores from managed services that have proprietary extensions
+        #
+        # We capture PIPESTATUS inside bash -c to get both exit codes
+        # Write exit codes to temp file to avoid output parsing issues
+        EXIT_CODES_FILE=\"${RESTORE_LOG_DIR}/restore-${DATABASE_NAME}.exitcodes\"
         set +e
-        sudo -u postgres bash -c \"\${PG_BIN}/pg_dump \\\"${CONNECTION_STRING}\\\" \${DUMP_FLAGS} | \${PG_BIN}/psql -p ${PG_PORT} -d \\\"${DATABASE_NAME}\\\" -v ON_ERROR_STOP=0\" 2>&1
-        PIPE_EXIT_CODE=\$?
+        sudo -u postgres bash -c \"
+            set +e
+            \${PG_BIN}/pg_dump \\\"${CONNECTION_STRING}\\\" \${DUMP_FLAGS} | \${PG_BIN}/psql -p ${PG_PORT} -d \\\"${DATABASE_NAME}\\\" -v ON_ERROR_STOP=0
+            echo \\\${PIPESTATUS[0]}:\\\${PIPESTATUS[1]} > ${EXIT_CODES_FILE}
+        \" 2>&1
         set -e
 
-        # Log the exit code for debugging
-        log \"Restore completed with exit code \$PIPE_EXIT_CODE\"
-
-        # Only fail on truly fatal errors
-        if [ \$PIPE_EXIT_CODE -gt 3 ]; then
-            die \"pg_dump | psql piped restore failed with fatal exit code \$PIPE_EXIT_CODE\"
+        # Read and parse exit codes
+        if [ -f \"\$EXIT_CODES_FILE\" ]; then
+            EXIT_CODES=\$(cat \"\$EXIT_CODES_FILE\")
+            PGDUMP_EXIT=\$(echo \"\$EXIT_CODES\" | cut -d: -f1)
+            PSQL_EXIT=\$(echo \"\$EXIT_CODES\" | cut -d: -f2)
+            rm -f \"\$EXIT_CODES_FILE\"
+        else
+            die \"Failed to capture exit codes from pg_dump/psql pipeline\"
         fi
 
-        if [ \$PIPE_EXIT_CODE -ne 0 ]; then
-            log \"Restore completed with warnings\"
+        # Log the exit codes for debugging
+        log \"Restore completed - pg_dump exit code: \$PGDUMP_EXIT, psql exit code: \$PSQL_EXIT\"
+
+        # Check pg_dump exit code
+        if [ \$PGDUMP_EXIT -ne 0 ]; then
+            die \"pg_dump failed with exit code \$PGDUMP_EXIT - restore incomplete\"
+        fi
+
+        # Check psql exit code - allow non-fatal errors (exit codes 1-3) from psql
+        # These can occur with missing extensions or other non-fatal issues
+        if [ \$PSQL_EXIT -gt 3 ]; then
+            die \"psql restore failed with fatal exit code \$PSQL_EXIT\"
+        fi
+
+        if [ \$PSQL_EXIT -ne 0 ]; then
+            log \"Restore completed with psql warnings (exit code \$PSQL_EXIT)\"
         fi
 
         log \"Verifying PostgreSQL is accepting connections after restore...\"
