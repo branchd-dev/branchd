@@ -607,13 +607,84 @@ func (s *Service) DeleteBranch(ctx context.Context, params DeleteBranchParams) e
 	return nil
 }
 
+// killRestoreProcess kills an active restore process if it's running
+func (s *Service) killRestoreProcess(ctx context.Context, restoreName string) {
+	pidFile := fmt.Sprintf("/var/log/branchd/restore-%s.pid", restoreName)
+	logFile := fmt.Sprintf("/var/log/branchd/restore-%s.log", restoreName)
+
+	// Check if PID file exists and process is running
+	checkCmd := fmt.Sprintf(`
+		if [ -f %s ]; then
+			pid=$(cat %s)
+			if kill -0 $pid 2>/dev/null; then
+				echo "running:$pid"
+			else
+				echo "stopped"
+			fi
+		else
+			echo "not_found"
+		fi
+	`, pidFile, pidFile)
+
+	cmd := exec.CommandContext(ctx, "bash", "-c", checkCmd)
+	outputBytes, err := cmd.CombinedOutput()
+	if err != nil {
+		s.logger.Warn().
+			Err(err).
+			Str("restore_name", restoreName).
+			Msg("Failed to check restore process status")
+	}
+
+	output := strings.TrimSpace(string(outputBytes))
+
+	// If process is running, kill it
+	if strings.HasPrefix(output, "running:") {
+		pid := strings.TrimPrefix(output, "running:")
+
+		// Kill the process (SIGTERM first, then SIGKILL if needed)
+		killCmd := fmt.Sprintf(`
+			pid=%s
+			if kill -0 $pid 2>/dev/null; then
+				kill -TERM $pid 2>/dev/null || true
+				sleep 1
+				if kill -0 $pid 2>/dev/null; then
+					kill -KILL $pid 2>/dev/null || true
+				fi
+			fi
+		`, pid)
+
+		killExecCmd := exec.CommandContext(ctx, "bash", "-c", killCmd)
+		if killOutput, killErr := killExecCmd.CombinedOutput(); killErr != nil {
+			s.logger.Warn().
+				Err(killErr).
+				Str("output", string(killOutput)).
+				Str("pid", pid).
+				Msg("Failed to kill restore process")
+		} else {
+			s.logger.Info().
+				Str("restore_name", restoreName).
+				Str("pid", pid).
+				Msg("Restore process killed successfully")
+		}
+	}
+
+	// Clean up PID and log files
+	cleanupCmd := fmt.Sprintf("rm -f %s %s", pidFile, logFile)
+	cleanupExecCmd := exec.CommandContext(ctx, "bash", "-c", cleanupCmd)
+	if cleanupOutput, cleanupErr := cleanupExecCmd.CombinedOutput(); cleanupErr != nil {
+		s.logger.Warn().
+			Err(cleanupErr).
+			Str("output", string(cleanupOutput)).
+			Msg("Failed to clean up restore files")
+	} else {
+		s.logger.Debug().
+			Str("restore_name", restoreName).
+			Msg("Restore PID and log files cleaned up")
+	}
+}
+
 // DeleteRestore deletes a restore from the main cluster
 func (s *Service) DeleteRestore(ctx context.Context, restore *models.Restore) error {
-	s.logger.Info().
-		Str("restore_id", restore.ID).
-		Str("restore_name", restore.Name).
-		Msg("Starting restore deletion")
-
 	// Load config to get PostgreSQL version
 	var config models.Config
 	if err := s.db.First(&config).Error; err != nil {
@@ -636,6 +707,9 @@ func (s *Service) DeleteRestore(ctx context.Context, restore *models.Restore) er
 	if !ok {
 		return fmt.Errorf("unsupported PostgreSQL version: %s", config.PostgresVersion)
 	}
+
+	// Kill any active restore process before dropping the database
+	s.killRestoreProcess(ctx, restore.Name)
 
 	// Drop restore database from PostgreSQL cluster
 	dropCmd := fmt.Sprintf("sudo -u postgres psql -p %d -c 'DROP DATABASE IF EXISTS \"%s\"'", port, restore.Name)
