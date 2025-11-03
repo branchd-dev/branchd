@@ -382,6 +382,100 @@ fi
 echo "✓ fail2ban is running with jails:"
 sudo fail2ban-client status
 
+echo "=== Log Rotation Configuration ==="
+
+# Configure aggressive log rotation to prevent disk space issues
+echo "Configuring log rotation for system logs..."
+sudo tee /etc/logrotate.d/branchd-system > /dev/null << 'EOF'
+# Aggressive log rotation for syslog, kern.log, and ufw.log
+/var/log/syslog
+/var/log/kern.log
+/var/log/ufw.log
+{
+    # Rotate when file reaches 50MB
+    size 50M
+    rotate 2
+
+    # Compress old logs
+    compress
+    delaycompress
+
+    # Don't error if log is missing
+    missingok
+    notifempty
+
+    # Create new log file after rotation
+    create 0640 syslog adm
+
+    # Use date extension for rotated files
+    dateext
+    dateformat -%Y%m%d-%s
+
+    postrotate
+        # Reload rsyslog to write to new file
+        /usr/lib/rsyslog/rsyslog-rotate
+    endscript
+}
+EOF
+
+# Configure log rotation for branchd restore logs
+echo "Configuring log rotation for branchd restore logs..."
+sudo tee /etc/logrotate.d/branchd-restore > /dev/null << 'EOF'
+# Log rotation for branchd restore logs
+/var/log/branchd/restore-*.log
+{
+    # Rotate when file reaches 50MB
+    size 50M
+    rotate 2
+
+    # Compress old logs
+    compress
+    delaycompress
+
+    # Don't error if log is missing
+    missingok
+    notifempty
+
+    # Create new log file after rotation
+    create 0644 root root
+
+    # Use date extension for rotated files
+    dateext
+    dateformat -%Y%m%d-%s
+}
+EOF
+
+# Configure journald to limit size
+echo "Configuring journald size limits..."
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo tee /etc/systemd/journald.conf.d/size-limit.conf > /dev/null << 'EOF'
+[Journal]
+SystemMaxUse=200M
+SystemKeepFree=1G
+SystemMaxFileSize=50M
+RuntimeMaxUse=100M
+RuntimeKeepFree=100M
+RuntimeMaxFileSize=50M
+MaxRetentionSec=7day
+EOF
+
+# Restart journald to apply new settings
+sudo systemctl restart systemd-journald
+
+# Force an immediate rotation and cleanup
+echo "Running initial log rotation..."
+sudo logrotate -f /etc/logrotate.d/branchd-system
+sudo logrotate -f /etc/logrotate.d/branchd-restore || true
+
+# Verify configurations
+echo "Verifying log rotation configuration..."
+if ! sudo logrotate -d /etc/logrotate.d/branchd-system > /dev/null 2>&1; then
+    echo "ERROR: branchd-system logrotate configuration is invalid!"
+    exit 1
+fi
+
+echo "✓ Log rotation configured (50MB limit per log, compressed)"
+
 echo "=== UFW Firewall Configuration ==="
 
 # Configure UFW base rules
