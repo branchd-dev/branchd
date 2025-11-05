@@ -271,9 +271,10 @@ func (c *Client) UpdateServer(serverIP string) error {
 
 // AnonRule represents an anonymization rule
 type AnonRule struct {
-	Table    string `json:"table"`
-	Column   string `json:"column"`
-	Template string `json:"template"`
+	Table    string          `json:"table"`
+	Column   string          `json:"column"`
+	Template json.RawMessage `json:"template"`
+	Type     string          `json:"type,omitempty"` // Optional: "text", "integer", "boolean", "null"
 }
 
 // UpdateAnonRulesRequest represents the bulk update request

@@ -17,9 +17,126 @@ type Server struct {
 
 // AnonRule represents an anonymization rule
 type AnonRule struct {
-	Table    string `json:"table"`
-	Column   string `json:"column"`
-	Template string `json:"template"`
+	Table    string          `json:"table"`
+	Column   string          `json:"column"`
+	Template json.RawMessage `json:"template"`
+	Type     string          `json:"type,omitempty"` // Optional: "text", "integer", "boolean", "null" - overrides auto-detection
+}
+
+// ParsedAnonRule represents a parsed anonymization rule with type information
+type ParsedAnonRule struct {
+	Table      string
+	Column     string
+	Template   string // String representation of the template value
+	ColumnType string // "text", "integer", "boolean", "null"
+}
+
+// Parse parses the JSON template and returns type information
+func (r *AnonRule) Parse() (ParsedAnonRule, error) {
+	parsed := ParsedAnonRule{
+		Table:  r.Table,
+		Column: r.Column,
+	}
+
+	// Try to unmarshal as different types to detect the JSON type
+	if len(r.Template) == 0 {
+		return parsed, fmt.Errorf("template is empty")
+	}
+
+	// If type is explicitly specified, use it and extract the template value
+	if r.Type != "" {
+		// Validate the type
+		validTypes := map[string]bool{"text": true, "integer": true, "boolean": true, "null": true}
+		if !validTypes[r.Type] {
+			return parsed, fmt.Errorf("invalid type '%s', must be one of: text, integer, boolean, null", r.Type)
+		}
+
+		parsed.ColumnType = r.Type
+
+		// For null type, template is ignored
+		if r.Type == "null" {
+			parsed.Template = ""
+			return parsed, nil
+		}
+
+		// Extract template value as string
+		var strVal string
+		if err := json.Unmarshal(r.Template, &strVal); err == nil {
+			parsed.Template = strVal
+			return parsed, nil
+		}
+
+		// If string unmarshal fails, try other JSON types and convert to string
+		// This handles cases like: template is number but type is "text"
+
+		// Try boolean
+		var boolVal bool
+		if err := json.Unmarshal(r.Template, &boolVal); err == nil {
+			if boolVal {
+				parsed.Template = "true"
+			} else {
+				parsed.Template = "false"
+			}
+			return parsed, nil
+		}
+
+		// Try number
+		var numVal float64
+		if err := json.Unmarshal(r.Template, &numVal); err == nil {
+			if numVal == float64(int64(numVal)) {
+				parsed.Template = fmt.Sprintf("%d", int64(numVal))
+			} else {
+				parsed.Template = fmt.Sprintf("%f", numVal)
+			}
+			return parsed, nil
+		}
+
+		return parsed, fmt.Errorf("failed to parse template with explicit type '%s'", r.Type)
+	}
+
+	// Auto-detect type from JSON
+
+	// Check for null
+	if string(r.Template) == "null" {
+		parsed.ColumnType = "null"
+		parsed.Template = ""
+		return parsed, nil
+	}
+
+	// Try boolean
+	var boolVal bool
+	if err := json.Unmarshal(r.Template, &boolVal); err == nil {
+		parsed.ColumnType = "boolean"
+		if boolVal {
+			parsed.Template = "true"
+		} else {
+			parsed.Template = "false"
+		}
+		return parsed, nil
+	}
+
+	// Try number (integer or float)
+	var numVal float64
+	if err := json.Unmarshal(r.Template, &numVal); err == nil {
+		parsed.ColumnType = "integer"
+		// Convert to string, handle both int and float
+		if numVal == float64(int64(numVal)) {
+			parsed.Template = fmt.Sprintf("%d", int64(numVal))
+		} else {
+			parsed.Template = fmt.Sprintf("%f", numVal)
+		}
+		return parsed, nil
+	}
+
+	// Try string (must be last, as it's the most permissive)
+	var strVal string
+	if err := json.Unmarshal(r.Template, &strVal); err == nil {
+		parsed.ColumnType = "text"
+		parsed.Template = strVal
+		return parsed, nil
+	}
+
+	return parsed, fmt.Errorf("unsupported template type: %s", string(r.Template))
 }
 
 // Config represents the CLI configuration file

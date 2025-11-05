@@ -94,7 +94,7 @@ func generateTableUpdateSQL(table string, rules []models.AnonRule, pkColumn stri
 	var setClauses []string
 	var whereConditions []string
 	for _, rule := range rules {
-		setValue := renderTemplate(rule.Template)
+		setValue := renderTemplate(rule.Template, rule.ColumnType)
 		columnQuoted := quoteIdentifier(rule.Column)
 
 		// Add SET clause
@@ -134,7 +134,43 @@ WHERE %s.ctid = numbered_rows.ctid
 
 // renderTemplate converts template string to SQL expression
 // Replaces ${index} with row number reference
-func renderTemplate(template string) string {
+// Handles different column types: text, integer, boolean, null
+func renderTemplate(template string, columnType string) string {
+	// Handle NULL type - ignore template and return SQL NULL
+	if columnType == "null" {
+		return "NULL"
+	}
+
+	// Handle boolean type
+	if columnType == "boolean" {
+		// Return unquoted true/false
+		return template
+	}
+
+	// Handle integer type
+	if columnType == "integer" {
+		// Check if template contains ${index}
+		if strings.Contains(template, "${index}") {
+			// For integer columns with ${index}, we need to cast to text for concatenation,
+			// then cast back to integer
+			parts := strings.Split(template, "${index}")
+			var sqlParts []string
+			for i, part := range parts {
+				if part != "" {
+					sqlParts = append(sqlParts, "'"+part+"'")
+				}
+				if i < len(parts)-1 {
+					sqlParts = append(sqlParts, "numbered_rows._row_num::text")
+				}
+			}
+			// Concatenate and cast to integer
+			return "(" + strings.Join(sqlParts, " || ") + ")::integer"
+		}
+		// No placeholder, return as unquoted integer
+		return template
+	}
+
+	// Handle text type (default)
 	// Check if template contains ${index}
 	if !strings.Contains(template, "${index}") {
 		// No placeholder, return as quoted string

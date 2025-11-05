@@ -44,6 +44,7 @@ func runUpdateAnonRules() error {
 			Table:    rule.Table,
 			Column:   rule.Column,
 			Template: rule.Template,
+			Type:     rule.Type, // Pass through optional type field
 		})
 	}
 

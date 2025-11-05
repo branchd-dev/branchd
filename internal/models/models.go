@@ -142,9 +142,10 @@ type User struct {
 // Rules are applied globally to all database restores
 type AnonRule struct {
 	BaseModel
-	Table    string `json:"table" gorm:"not null"`
-	Column   string `json:"column" gorm:"not null"`
-	Template string `json:"template" gorm:"not null"` // Template with ${index} variable
+	Table      string `json:"table" gorm:"not null"`
+	Column     string `json:"column" gorm:"not null"`
+	Template   string `json:"template" gorm:"not null"`
+	ColumnType string `json:"column_type" gorm:"not null"` // "text", "integer", "boolean", "null"
 }
 
 // AutoMigrate runs database migrations for all models

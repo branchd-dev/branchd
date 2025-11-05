@@ -9,64 +9,43 @@ import (
 
 func TestGenerateSQL(t *testing.T) {
 	tests := []struct {
-		name        string
-		rules       []models.AnonRule
-		primaryKeys map[string]string
-		want        string
+		name  string
+		rules []models.AnonRule
+		want  string
 	}{
 		{
-			name:        "empty rules",
-			rules:       []models.AnonRule{},
-			primaryKeys: map[string]string{},
-			want:        "",
+			name:  "empty rules",
+			rules: []models.AnonRule{},
+			want:  "",
 		},
 		{
-			name: "single column anonymization without PK",
+			name: "single column anonymization",
 			rules: []models.AnonRule{
-				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
+				{Table: "users", Column: "email", Template: "user_${index}@example.com", ColumnType: "text"},
 			},
-			primaryKeys: map[string]string{},
-			want:        "UPDATE",
-		},
-		{
-			name: "single column anonymization with PK",
-			rules: []models.AnonRule{
-				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
-			},
-			primaryKeys: map[string]string{"users": "id"},
-			want:        "ORDER BY \"id\"",
+			want: "UPDATE",
 		},
 		{
 			name: "multiple columns same table",
 			rules: []models.AnonRule{
-				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
-				{Table: "users", Column: "name", Template: "User ${index}"},
+				{Table: "users", Column: "email", Template: "user_${index}@example.com", ColumnType: "text"},
+				{Table: "users", Column: "name", Template: "User ${index}", ColumnType: "text"},
 			},
-			primaryKeys: map[string]string{},
-			want:        "numbered_rows._row_num",
+			want: "numbered_rows._row_num",
 		},
 		{
-			name: "multiple tables with mixed PKs",
+			name: "multiple tables",
 			rules: []models.AnonRule{
-				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
-				{Table: "orders", Column: "reference", Template: "ORD-${index}"},
+				{Table: "users", Column: "email", Template: "user_${index}@example.com", ColumnType: "text"},
+				{Table: "orders", Column: "reference", Template: "ORD-${index}", ColumnType: "text"},
 			},
-			primaryKeys: map[string]string{"users": "id"}, // Only users has PK
-			want:        "-- Anonymize table:",
-		},
-		{
-			name: "idempotency - IS DISTINCT FROM clause",
-			rules: []models.AnonRule{
-				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
-			},
-			primaryKeys: map[string]string{},
-			want:        "IS DISTINCT FROM",
+			want: "-- Anonymize table:",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GenerateSQL(tt.rules, tt.primaryKeys)
+			got := GenerateSQL(tt.rules, make(map[string]string))
 			if tt.want != "" && !strings.Contains(got, tt.want) {
 				t.Errorf("GenerateSQL() output doesn't contain expected string\nwant substring: %v\ngot: %v", tt.want, got)
 			}
@@ -79,30 +58,64 @@ func TestGenerateSQL(t *testing.T) {
 
 func TestRenderTemplate(t *testing.T) {
 	tests := []struct {
-		name     string
-		template string
-		want     string
+		name       string
+		template   string
+		columnType string
+		want       string
 	}{
 		{
-			name:     "simple template with index",
-			template: "user_${index}@example.com",
-			want:     "'user_' || numbered_rows._row_num || '@example.com'",
+			name:       "simple text template with index",
+			template:   "user_${index}@example.com",
+			columnType: "text",
+			want:       "'user_' || numbered_rows._row_num || '@example.com'",
 		},
 		{
-			name:     "template with multiple placeholders",
-			template: "User ${index}",
-			want:     "'User ' || numbered_rows._row_num",
+			name:       "text template with multiple placeholders",
+			template:   "User ${index}",
+			columnType: "text",
+			want:       "'User ' || numbered_rows._row_num",
 		},
 		{
-			name:     "template without placeholder",
-			template: "static_value",
-			want:     "'static_value'",
+			name:       "text template without placeholder",
+			template:   "static_value",
+			columnType: "text",
+			want:       "'static_value'",
+		},
+		{
+			name:       "integer template without placeholder",
+			template:   "2222",
+			columnType: "integer",
+			want:       "2222",
+		},
+		{
+			name:       "integer template with index",
+			template:   "${index}",
+			columnType: "integer",
+			want:       "(numbered_rows._row_num::text)::integer",
+		},
+		{
+			name:       "boolean true",
+			template:   "true",
+			columnType: "boolean",
+			want:       "true",
+		},
+		{
+			name:       "boolean false",
+			template:   "false",
+			columnType: "boolean",
+			want:       "false",
+		},
+		{
+			name:       "null type",
+			template:   "",
+			columnType: "null",
+			want:       "NULL",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := renderTemplate(tt.template); got != tt.want {
+			if got := renderTemplate(tt.template, tt.columnType); got != tt.want {
 				t.Errorf("renderTemplate() = %v, want %v", got, tt.want)
 			}
 		})

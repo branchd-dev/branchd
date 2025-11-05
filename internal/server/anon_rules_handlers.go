@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -10,9 +12,92 @@ import (
 )
 
 type CreateAnonRuleRequest struct {
-	Table    string `json:"table" binding:"required"`
-	Column   string `json:"column" binding:"required"`
-	Template string `json:"template" binding:"required"`
+	Table    string          `json:"table" binding:"required"`
+	Column   string          `json:"column" binding:"required"`
+	Template json.RawMessage `json:"template" binding:"required"`
+	Type     string          `json:"type"` // Optional: "text", "integer", "boolean", "null" - overrides auto-detection
+}
+
+// Parse parses the template and detects its type
+func (r *CreateAnonRuleRequest) Parse() (template string, columnType string, err error) {
+	// If type is explicitly specified, use it
+	if r.Type != "" {
+		// Validate the type
+		validTypes := map[string]bool{"text": true, "integer": true, "boolean": true, "null": true}
+		if !validTypes[r.Type] {
+			return "", "", fmt.Errorf("invalid type '%s', must be one of: text, integer, boolean, null", r.Type)
+		}
+
+		columnType = r.Type
+
+		// For null type, template is ignored
+		if r.Type == "null" {
+			return "", "null", nil
+		}
+
+		// Extract template value as string
+		var strVal string
+		if err := json.Unmarshal(r.Template, &strVal); err == nil {
+			return strVal, columnType, nil
+		}
+
+		// If string unmarshal fails, try other JSON types and convert to string
+		// This handles cases like: template is number but type is "text"
+
+		// Try boolean
+		var boolVal bool
+		if err := json.Unmarshal(r.Template, &boolVal); err == nil {
+			if boolVal {
+				return "true", columnType, nil
+			}
+			return "false", columnType, nil
+		}
+
+		// Try number
+		var numVal float64
+		if err := json.Unmarshal(r.Template, &numVal); err == nil {
+			if numVal == float64(int64(numVal)) {
+				return fmt.Sprintf("%d", int64(numVal)), columnType, nil
+			}
+			return fmt.Sprintf("%f", numVal), columnType, nil
+		}
+
+		return "", "", fmt.Errorf("failed to parse template with explicit type '%s'", r.Type)
+	}
+
+	// Auto-detect type from JSON
+
+	// Check for null
+	if string(r.Template) == "null" {
+		return "", "null", nil
+	}
+
+	// Try boolean
+	var boolVal bool
+	if err := json.Unmarshal(r.Template, &boolVal); err == nil {
+		if boolVal {
+			return "true", "boolean", nil
+		}
+		return "false", "boolean", nil
+	}
+
+	// Try number (integer or float)
+	var numVal float64
+	if err := json.Unmarshal(r.Template, &numVal); err == nil {
+		// Convert to string, handle both int and float
+		if numVal == float64(int64(numVal)) {
+			return fmt.Sprintf("%d", int64(numVal)), "integer", nil
+		}
+		return fmt.Sprintf("%f", numVal), "integer", nil
+	}
+
+	// Try string (must be last, as it's the most permissive)
+	var strVal string
+	if err := json.Unmarshal(r.Template, &strVal); err == nil {
+		return strVal, "text", nil
+	}
+
+	return "", "", fmt.Errorf("unsupported template type: %s", string(r.Template))
 }
 
 type UpdateAnonRulesRequest struct {
@@ -44,11 +129,20 @@ func (s *Server) createAnonRule(c *gin.Context) {
 		return
 	}
 
+	// Parse template to detect type
+	template, columnType, err := req.Parse()
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to parse template")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid template", "details": err.Error()})
+		return
+	}
+
 	// Create anon rule (global, applies to all database restores)
 	rule := models.AnonRule{
-		Table:    req.Table,
-		Column:   req.Column,
-		Template: req.Template,
+		Table:      req.Table,
+		Column:     req.Column,
+		Template:   template,
+		ColumnType: columnType,
 	}
 
 	if err := s.db.Create(&rule).Error; err != nil {
@@ -61,6 +155,7 @@ func (s *Server) createAnonRule(c *gin.Context) {
 		Str("rule_id", rule.ID).
 		Str("table", rule.Table).
 		Str("column", rule.Column).
+		Str("column_type", rule.ColumnType).
 		Msg("Created anonymization rule")
 
 	c.JSON(http.StatusCreated, rule)
@@ -109,6 +204,23 @@ func (s *Server) updateAnonRules(c *gin.Context) {
 		return
 	}
 
+	// Parse all rules first to validate
+	var parsedRules []models.AnonRule
+	for _, rule := range req.Rules {
+		template, columnType, err := rule.Parse()
+		if err != nil {
+			s.logger.Warn().Err(err).Str("table", rule.Table).Str("column", rule.Column).Msg("Failed to parse template")
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid template for %s.%s", rule.Table, rule.Column), "details": err.Error()})
+			return
+		}
+		parsedRules = append(parsedRules, models.AnonRule{
+			Table:      rule.Table,
+			Column:     rule.Column,
+			Template:   template,
+			ColumnType: columnType,
+		})
+	}
+
 	// Use transaction to ensure atomicity (delete all + insert all)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		// Delete all existing rules
@@ -117,17 +229,8 @@ func (s *Server) updateAnonRules(c *gin.Context) {
 		}
 
 		// Insert new rules
-		var newRules []models.AnonRule
-		for _, rule := range req.Rules {
-			newRules = append(newRules, models.AnonRule{
-				Table:    rule.Table,
-				Column:   rule.Column,
-				Template: rule.Template,
-			})
-		}
-
-		if len(newRules) > 0 {
-			if err := tx.Create(&newRules).Error; err != nil {
+		if len(parsedRules) > 0 {
+			if err := tx.Create(&parsedRules).Error; err != nil {
 				return err
 			}
 		}
