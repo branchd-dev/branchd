@@ -15,9 +15,17 @@ type Server struct {
 	Alias string `json:"alias"`
 }
 
+// AnonRule represents an anonymization rule
+type AnonRule struct {
+	Table    string `json:"table"`
+	Column   string `json:"column"`
+	Template string `json:"template"`
+}
+
 // Config represents the CLI configuration file
 type Config struct {
-	Servers []Server `json:"servers"`
+	Servers   []Server   `json:"servers"`
+	AnonRules []AnonRule `json:"anonRules,omitempty"`
 }
 
 // DefaultConfig returns a default configuration with example servers

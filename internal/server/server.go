@@ -265,6 +265,7 @@ func (s *Server) setupRouter() {
 		// Anonymization rules (global)
 		api.GET("/anon-rules", s.listAnonRules)
 		api.POST("/anon-rules", s.createAnonRule)
+		api.PUT("/anon-rules", s.updateAnonRules)
 		api.DELETE("/anon-rules/:id", s.deleteAnonRule)
 
 		// Branches

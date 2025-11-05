@@ -146,6 +146,10 @@ export interface InternalServerSystemInfoResponse {
   vm?: InternalServerVMMetrics;
 }
 
+export interface InternalServerUpdateAnonRulesRequest {
+  rules: InternalServerCreateAnonRuleRequest[];
+}
+
 export interface InternalServerUpdateConfigRequest {
   connectionString?: string;
   domain?: string;
@@ -430,6 +434,18 @@ export class Api<
       this.request<GithubComBranchdDevBranchdInternalModelsAnonRule[], any>({
         path: `/api/anon-rules`,
         method: "GET",
+        ...params,
+      }),
+
+    anonRulesUpdate: (
+      request: InternalServerUpdateAnonRulesRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<GithubComBranchdDevBranchdInternalModelsAnonRule[], any>({
+        path: `/api/anon-rules`,
+        method: "PUT",
+        body: request,
+        type: ContentType.Json,
         ...params,
       }),
 

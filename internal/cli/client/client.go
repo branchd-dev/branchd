@@ -269,3 +269,57 @@ func (c *Client) UpdateServer(serverIP string) error {
 	return nil
 }
 
+// AnonRule represents an anonymization rule
+type AnonRule struct {
+	Table    string `json:"table"`
+	Column   string `json:"column"`
+	Template string `json:"template"`
+}
+
+// UpdateAnonRulesRequest represents the bulk update request
+type UpdateAnonRulesRequest struct {
+	Rules []AnonRule `json:"rules"`
+}
+
+// UpdateAnonRules bulk replaces all anonymization rules
+func (c *Client) UpdateAnonRules(serverIP string, rules []AnonRule) error {
+	token, err := auth.LoadToken(serverIP)
+	if err != nil {
+		return err
+	}
+
+	reqBody := UpdateAnonRulesRequest{
+		Rules: rules,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(
+		"PUT",
+		fmt.Sprintf("%s/api/anon-rules", c.baseURL),
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update anon rules (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+

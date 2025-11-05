@@ -15,6 +15,10 @@ type CreateAnonRuleRequest struct {
 	Template string `json:"template" binding:"required"`
 }
 
+type UpdateAnonRulesRequest struct {
+	Rules []CreateAnonRuleRequest `json:"rules" binding:"required"`
+}
+
 // @Router /api/anon-rules [get]
 // @Success 200 {object} []models.AnonRule
 func (s *Server) listAnonRules(c *gin.Context) {
@@ -92,4 +96,62 @@ func (s *Server) deleteAnonRule(c *gin.Context) {
 		Msg("Deleted anonymization rule")
 
 	c.Status(http.StatusNoContent)
+}
+
+// @Router /api/anon-rules [put]
+// @Param request body UpdateAnonRulesRequest true "Update anon rules request"
+// @Success 200 {object} []models.AnonRule
+func (s *Server) updateAnonRules(c *gin.Context) {
+	var req UpdateAnonRulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		s.logger.Warn().Err(err).Msg("Invalid request body")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
+		return
+	}
+
+	// Use transaction to ensure atomicity (delete all + insert all)
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Delete all existing rules
+		if err := tx.Where("1=1").Delete(&models.AnonRule{}).Error; err != nil {
+			return err
+		}
+
+		// Insert new rules
+		var newRules []models.AnonRule
+		for _, rule := range req.Rules {
+			newRules = append(newRules, models.AnonRule{
+				Table:    rule.Table,
+				Column:   rule.Column,
+				Template: rule.Template,
+			})
+		}
+
+		if len(newRules) > 0 {
+			if err := tx.Create(&newRules).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to update anon rules")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update anonymization rules"})
+		return
+	}
+
+	// Load and return the new rules
+	var rules []models.AnonRule
+	if err := s.db.Order("created_at DESC").Find(&rules).Error; err != nil {
+		s.logger.Error().Err(err).Msg("Failed to load anon rules")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	s.logger.Info().
+		Int("count", len(rules)).
+		Msg("Updated anonymization rules")
+
+	c.JSON(http.StatusOK, rules)
 }

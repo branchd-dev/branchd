@@ -47,6 +47,7 @@ func init() {
 	rootCmd.AddCommand(commands.NewSelectServerCmd())
 	rootCmd.AddCommand(commands.NewUpdateCmd(version))
 	rootCmd.AddCommand(commands.NewUpdateServerCmd())
+	rootCmd.AddCommand(commands.NewUpdateAnonRulesCmd())
 }
 
 // Execute runs the root command
