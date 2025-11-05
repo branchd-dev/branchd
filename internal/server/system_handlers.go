@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +13,7 @@ import (
 
 	"github.com/branchd-dev/branchd/internal/models"
 	"github.com/branchd-dev/branchd/internal/pgclient"
+	"github.com/branchd-dev/branchd/internal/sysinfo"
 )
 
 // SystemInfoResponse contains VM and source database information
@@ -24,17 +23,8 @@ type SystemInfoResponse struct {
 	SourceDatabase *DatabaseMetrics `json:"source_database,omitempty"`
 }
 
-// VMMetrics contains VM resource information
-type VMMetrics struct {
-	CPUCount       int     `json:"cpu_count"`
-	MemoryTotalGB  float64 `json:"memory_total_gb"`
-	MemoryUsedGB   float64 `json:"memory_used_gb"`
-	MemoryFreeGB   float64 `json:"memory_free_gb"`
-	DiskTotalGB    float64 `json:"disk_total_gb"`
-	DiskUsedGB     float64 `json:"disk_used_gb"`
-	DiskAvailableGB float64 `json:"disk_available_gb"`
-	DiskUsedPercent float64 `json:"disk_used_percent"`
-}
+// VMMetrics contains VM resource information (aliased from sysinfo)
+type VMMetrics = sysinfo.Metrics
 
 // DatabaseMetrics contains source database information
 type DatabaseMetrics struct {
@@ -58,7 +48,7 @@ func (s *Server) getSystemInfo(c *gin.Context) {
 	defer cancel()
 
 	// Get VM metrics
-	vmMetrics, err := s.getVMMetrics(ctx)
+	vmMetrics, err := sysinfo.GetMetrics(ctx)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to get VM metrics")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get VM metrics: %v", err)})
@@ -67,7 +57,7 @@ func (s *Server) getSystemInfo(c *gin.Context) {
 
 	response := SystemInfoResponse{
 		Version: s.version,
-		VM:      *vmMetrics,
+		VM:      vmMetrics,
 	}
 
 	// Try to get source database metrics if config exists
@@ -78,50 +68,6 @@ func (s *Server) getSystemInfo(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
-}
-
-// getVMMetrics retrieves VM resource information
-func (s *Server) getVMMetrics(ctx context.Context) (*VMMetrics, error) {
-	metrics := &VMMetrics{
-		CPUCount: runtime.NumCPU(),
-	}
-
-	// Get memory info from /proc/meminfo (Linux)
-	memInfo, err := exec.CommandContext(ctx, "bash", "-c",
-		"grep -E '^(MemTotal|MemAvailable):' /proc/meminfo | awk '{print $2}'").Output()
-	if err == nil {
-		lines := strings.Split(strings.TrimSpace(string(memInfo)), "\n")
-		if len(lines) >= 2 {
-			if total, err := strconv.ParseFloat(lines[0], 64); err == nil {
-				metrics.MemoryTotalGB = total / (1024 * 1024) // KB to GB
-			}
-			if available, err := strconv.ParseFloat(lines[1], 64); err == nil {
-				metrics.MemoryFreeGB = available / (1024 * 1024) // KB to GB
-				metrics.MemoryUsedGB = metrics.MemoryTotalGB - metrics.MemoryFreeGB
-			}
-		}
-	}
-
-	// Get disk info from ZFS pool
-	zfsInfo, err := exec.CommandContext(ctx, "bash", "-c",
-		"zfs list -H -o available,used -p tank | head -1").Output()
-	if err == nil {
-		fields := strings.Fields(strings.TrimSpace(string(zfsInfo)))
-		if len(fields) >= 2 {
-			if available, err := strconv.ParseFloat(fields[0], 64); err == nil {
-				metrics.DiskAvailableGB = available / (1024 * 1024 * 1024)
-			}
-			if used, err := strconv.ParseFloat(fields[1], 64); err == nil {
-				metrics.DiskUsedGB = used / (1024 * 1024 * 1024)
-			}
-			metrics.DiskTotalGB = metrics.DiskAvailableGB + metrics.DiskUsedGB
-			if metrics.DiskTotalGB > 0 {
-				metrics.DiskUsedPercent = (metrics.DiskUsedGB / metrics.DiskTotalGB) * 100
-			}
-		}
-	}
-
-	return metrics, nil
 }
 
 // getSourceDatabaseMetrics retrieves source database information

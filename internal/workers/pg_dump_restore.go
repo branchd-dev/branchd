@@ -5,8 +5,8 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"os"
 	"os/exec"
-	"strings"
 	"text/template"
 	"time"
 
@@ -18,6 +18,9 @@ import (
 	"github.com/branchd-dev/branchd/internal/anonymize"
 	"github.com/branchd-dev/branchd/internal/config"
 	"github.com/branchd-dev/branchd/internal/models"
+	"github.com/branchd-dev/branchd/internal/pgtuning"
+	"github.com/branchd-dev/branchd/internal/restore"
+	"github.com/branchd-dev/branchd/internal/sysinfo"
 	"github.com/branchd-dev/branchd/internal/tasks"
 )
 
@@ -29,7 +32,13 @@ type pgDumpRestoreParams struct {
 	PgVersion        string
 	PgPort           int
 	DatabaseName     string
-	SchemaOnly       bool
+	SchemaOnly       string // "true" or "false" for template
+	ParallelJobs     int
+	DumpDir          string // Directory for pg_dump output (on EBS zpool)
+
+	// PostgreSQL tuning parameters
+	TuneSQL  []string // SQL statements to apply tuning
+	ResetSQL []string // SQL statements to reset tuning
 }
 
 // postgresVersionToPort maps PostgreSQL major version to its port
@@ -74,13 +83,91 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 		Bool("schema_only", database.SchemaOnly).
 		Msg("Starting pg_dump/restore process")
 
-	// Render and execute restore script
+	// Create orchestrator
+	orchestrator := restore.NewOrchestrator(logger)
+
+	// Calculate port
+	pgPort := postgresVersionToPort(configModel.PostgresVersion)
+
+	// 1. Validate inputs
+	if err := orchestrator.ValidateInputs(
+		configModel.ConnectionString,
+		configModel.PostgresVersion,
+		pgPort,
+		database.Name,
+	); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	// 2. Create log directory
+	if err := orchestrator.CreateLogDirectory(ctx); err != nil {
+		return fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	// 3. Check if restore is already in progress
+	isRunning, pid, err := orchestrator.CheckIfRestoreInProgress(ctx, database.Name)
+	if err != nil {
+		return fmt.Errorf("failed to check restore status: %w", err)
+	}
+
+	if isRunning {
+		logger.Info().
+			Int("pid", pid).
+			Str("restore_id", database.ID).
+			Msg("Restore is already running, skipping")
+
+		// Enqueue wait task to monitor existing restore
+		waitTask, err := tasks.NewPgDumpRestoreWaitCompleteTask(database.ID)
+		if err != nil {
+			return fmt.Errorf("failed to create wait complete task: %w", err)
+		}
+
+		_, err = client.Enqueue(waitTask,
+			asynq.ProcessIn(10*time.Second),
+			asynq.MaxRetry(4320), // Support up to 12 hours
+		)
+		if err != nil {
+			return fmt.Errorf("failed to enqueue wait complete task: %w", err)
+		}
+
+		return nil
+	}
+
+	// 4. Detect system resources and calculate optimal settings
+	resources, err := sysinfo.GetResources()
+	if err != nil {
+		logger.Warn().Err(err).Msg("Failed to detect system resources, using defaults")
+	}
+
+	tuning := pgtuning.CalculateOptimalSettings(resources)
+
+	logger.Info().
+		Int("cpu_cores", resources.CPUCores).
+		Int("parallel_jobs", tuning.ParallelJobs).
+		Str("maintenance_work_mem", tuning.MaintenanceWorkMem).
+		Str("max_wal_size", tuning.MaxWalSize).
+		Msg("Calculated optimal restore settings")
+
+	// 5. Calculate dump directory path (on zpool EBS volume)
+	// Use restore name which follows pattern: restore_{datetime}
+	dumpDir := fmt.Sprintf("/opt/branchd/%s", database.Name)
+
+	// 6. Render and execute restore script
+	schemaOnlyStr := "false"
+	if database.SchemaOnly {
+		schemaOnlyStr = "true"
+	}
+
 	scriptParams := pgDumpRestoreParams{
 		ConnectionString: configModel.ConnectionString,
 		PgVersion:        configModel.PostgresVersion,
-		PgPort:           postgresVersionToPort(configModel.PostgresVersion),
+		PgPort:           pgPort,
 		DatabaseName:     database.Name,
-		SchemaOnly:       database.SchemaOnly,
+		SchemaOnly:       schemaOnlyStr,
+		ParallelJobs:     tuning.ParallelJobs,
+		DumpDir:          dumpDir,
+		TuneSQL:          tuning.GenerateAlterSystemSQL(),
+		ResetSQL:         pgtuning.GenerateResetSQL(),
 	}
 
 	script, err := renderPgDumpRestoreScript(scriptParams)
@@ -88,20 +175,39 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 		return fmt.Errorf("failed to render pg_dump restore script: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	// Start the restore script in background using nohup
+	logFile := orchestrator.GetLogFilePath(database.Name)
+	pidFile := orchestrator.GetPIDFilePath(database.Name)
+
+	// Write script to a temporary file to avoid shell quoting issues
+	scriptPath := fmt.Sprintf("/tmp/branchd_restore_%s.sh", database.Name)
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		return fmt.Errorf("failed to write restore script: %w", err)
+	}
+
+	// Create a wrapper script that runs the restore in background and cleans up the temp file
+	wrapperScript := fmt.Sprintf(`
+		nohup bash -c 'bash "%s"; rm -f "%s"' > "%s" 2>&1 &
+		echo $! > "%s"
+	`, scriptPath, scriptPath, logFile, pidFile)
+
+	cmd := exec.CommandContext(ctx, "bash", "-c", wrapperScript)
 	outputBytes, err := cmd.CombinedOutput()
 	output := string(outputBytes)
 	if err != nil {
-		logger.Error().Err(err).Str("output", output).Msg("pg_dump/restore script failed")
-		return fmt.Errorf("pg_dump/restore script execution failed: %w", err)
+		logger.Error().Err(err).Str("output", output).Msg("Failed to start restore script")
+		return fmt.Errorf("restore script execution failed: %w", err)
 	}
 
 	logger.Info().
 		Str("restore_id", database.ID).
 		Bool("schema_only", database.SchemaOnly).
-		Msg("Restore process started in background - enqueueing completion check")
+		Int("parallel_jobs", tuning.ParallelJobs).
+		Int("data_phase_jobs", tuning.ParallelJobs+2).
+		Str("dump_dir", dumpDir).
+		Msg("Three-phase restore started in background - data phase will use +2 workers")
 
-	// Enqueue WaitComplete task to poll for completion (every 10 seconds)
+	// 7. Enqueue WaitComplete task to poll for completion
 	waitTask, err := tasks.NewPgDumpRestoreWaitCompleteTask(database.ID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to create wait complete task")
@@ -109,10 +215,9 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 	}
 
 	// Schedule first check in 10 seconds
-	// MaxRetry set high to support long-running restores (4320 retries = 12 hours at 10s intervals)
 	_, err = client.Enqueue(waitTask,
 		asynq.ProcessIn(10*time.Second),
-		asynq.MaxRetry(4320),
+		asynq.MaxRetry(4320), // 12 hours at 10s intervals
 	)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to enqueue wait complete task")
@@ -128,7 +233,6 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 
 // HandlePgDumpRestoreWaitComplete polls for pg_dump/restore completion
 // This handler only waits for restore to complete and marks database as ready
-// It does NOT create databases or trigger new restores (that's done in Execute handler)
 func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client *asynq.Client, db *gorm.DB, logger zerolog.Logger) error {
 	payload, err := tasks.ParseTaskPayload(t)
 	if err != nil {
@@ -136,8 +240,8 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 	}
 
 	// Load restore record
-	var restore models.Restore
-	if err := db.Where("id = ?", payload.RestoreID).First(&restore).Error; err != nil {
+	var restoreModel models.Restore
+	if err := db.Where("id = ?", payload.RestoreID).First(&restoreModel).Error; err != nil {
 		return fmt.Errorf("failed to load database: %w", err)
 	}
 
@@ -148,24 +252,27 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 	}
 
 	logger.Info().
-		Str("restore_id", restore.ID).
-		Str("restore_name", restore.Name).
-		Bool("schema_only", restore.SchemaOnly).
+		Str("restore_id", restoreModel.ID).
+		Str("restore_name", restoreModel.Name).
+		Bool("schema_only", restoreModel.SchemaOnly).
 		Msg("Checking pg_dump/restore status")
 
+	// Create orchestrator
+	orchestrator := restore.NewOrchestrator(logger)
+
 	// Check if restore is still running
-	isRunning, err := isRestoreProcessRunning(ctx, &restore, logger)
+	isRunning, _, err := orchestrator.CheckIfRestoreInProgress(ctx, restoreModel.Name)
 	if err != nil {
 		return fmt.Errorf("failed to check if restore process is running: %w", err)
 	}
 
 	if isRunning {
 		logger.Debug().
-			Str("restore_id", restore.ID).
+			Str("restore_id", restoreModel.ID).
 			Msg("Restore still running - scheduling next check in 10 seconds")
 
-		// Enqueue another WaitComplete task to check again in 10 seconds
-		waitTask, err := tasks.NewPgDumpRestoreWaitCompleteTask(restore.ID)
+		// Enqueue another WaitComplete task
+		waitTask, err := tasks.NewPgDumpRestoreWaitCompleteTask(restoreModel.ID)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to create wait complete task")
 			return fmt.Errorf("failed to create wait complete task: %w", err)
@@ -185,7 +292,7 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 	}
 
 	// Get restore result
-	status, logTail, err := getRestoreResult(ctx, &restore, logger)
+	status, logTail, err := orchestrator.CheckRestoreStatus(ctx, restoreModel.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get restore result: %w", err)
 	}
@@ -193,28 +300,26 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 	switch status {
 	case "success":
 		logger.Info().
-			Str("restore_id", restore.ID).
+			Str("restore_id", restoreModel.ID).
 			Msg("Restore completed successfully")
 
 		// Apply anonymization rules before marking as ready
-		if err := applyAnonymizationRules(ctx, db, &config, &restore, logger); err != nil {
+		if err := applyAnonymizationRules(ctx, db, &config, &restoreModel, logger); err != nil {
 			logger.Error().Err(err).Msg("Failed to apply anonymization rules")
 			return fmt.Errorf("failed to apply anonymization rules: %w", err)
 		}
 
 		// Mark database as ready
-		// For full databases, set ReadyAt after anonymization completes
-		// For schema-only, set ReadyAt now (after restore, though anon rules were also applied)
 		now := time.Now()
 		updates := map[string]interface{}{
 			"schema_ready": true,
 			"ready_at":     now,
 		}
-		if !restore.SchemaOnly {
+		if !restoreModel.SchemaOnly {
 			updates["data_ready"] = true
 		}
 
-		if err := db.Model(&restore).Updates(updates).Error; err != nil {
+		if err := db.Model(&restoreModel).Updates(updates).Error; err != nil {
 			return fmt.Errorf("failed to mark database ready: %w", err)
 		}
 
@@ -239,24 +344,22 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 		}
 
 		// Cleanup stale restores with no branches after successful restore
-		// Exclude the restore that just completed to ensure users can create branches from it
-		if err := cleanupStaleRestores(ctx, db, restore.ID, logger); err != nil {
+		if err := cleanupStaleRestores(ctx, db, restoreModel.ID, logger); err != nil {
 			logger.Warn().Err(err).Msg("Failed to cleanup stale restores (non-fatal)")
-			// Don't fail the task if cleanup fails - just log the warning
 		}
 
 		return nil
 
 	case "failed":
 		logger.Error().
-			Str("restore_id", restore.ID).
+			Str("restore_id", restoreModel.ID).
 			Str("log_tail", logTail).
 			Msg("Restore failed")
 		return fmt.Errorf("restore failed - log tail: %s", logTail)
 
 	default:
 		logger.Error().
-			Str("restore_id", restore.ID).
+			Str("restore_id", restoreModel.ID).
 			Str("status", status).
 			Msg("Restore process died without clear result")
 		return fmt.Errorf("restore process died - status: %s, log: %s", status, logTail)
@@ -275,108 +378,6 @@ func renderPgDumpRestoreScript(params pgDumpRestoreParams) (string, error) {
 	}
 
 	return buf.String(), nil
-}
-
-// isRestoreProcessRunning checks if the pg_dump/restore process is still running
-func isRestoreProcessRunning(ctx context.Context, database *models.Restore, logger zerolog.Logger) (bool, error) {
-	pidFile := fmt.Sprintf("/var/log/branchd/restore-%s.pid", database.Name)
-
-	// Check if PID file exists and process is running
-	cmd := fmt.Sprintf("if [ -f %s ]; then pid=$(cat %s); if kill -0 $pid 2>/dev/null; then echo 'running'; else echo 'stopped'; fi; else echo 'not_found'; fi", pidFile, pidFile)
-
-	execCmd := exec.CommandContext(ctx, "bash", "-c", cmd)
-	outputBytes, err := execCmd.CombinedOutput()
-	if err != nil {
-		return false, fmt.Errorf("failed to check restore process: %w", err)
-	}
-
-	outputTrimmed := bytes.TrimSpace(outputBytes)
-	isRunning := string(outputTrimmed) == "running"
-
-	logger.Debug().
-		Str("database_name", database.Name).
-		Bool("is_running", isRunning).
-		Str("output", string(outputTrimmed)).
-		Msg("Checked restore process status")
-
-	return isRunning, nil
-}
-
-// getRestoreResult reads the restore log to determine success/failure
-// Returns: (status, logTail, error)
-func getRestoreResult(ctx context.Context, database *models.Restore, logger zerolog.Logger) (string, string, error) {
-	logFile := fmt.Sprintf("/var/log/branchd/restore-%s.log", database.Name)
-
-	// Check for success marker first (most common case after restore completes)
-	successCmd := fmt.Sprintf("grep -q '__BRANCHD_RESTORE_SUCCESS__' %s 2>/dev/null && echo 'success' || true", logFile)
-	successExecCmd := exec.CommandContext(ctx, "bash", "-c", successCmd)
-	successOutputBytes, successErr := successExecCmd.CombinedOutput()
-	successOutput := string(successOutputBytes)
-	if successErr == nil && strings.TrimSpace(successOutput) == "success" {
-		logger.Debug().
-			Str("database_name", database.Name).
-			Msg("Found success marker in restore log")
-		return "success", "", nil
-	}
-
-	// Check for failure marker
-	failureCmd := fmt.Sprintf("grep -q '__BRANCHD_RESTORE_FAILED__' %s 2>/dev/null && echo 'failed' || true", logFile)
-	failureExecCmd := exec.CommandContext(ctx, "bash", "-c", failureCmd)
-	failureOutputBytes, failureErr := failureExecCmd.CombinedOutput()
-	failureOutput := string(failureOutputBytes)
-	if failureErr == nil && strings.TrimSpace(failureOutput) == "failed" {
-		logger.Debug().
-			Str("database_name", database.Name).
-			Msg("Found failure marker in restore log")
-		// Read log tail for failure case
-		tailCmd := fmt.Sprintf("tail -n 50 %s 2>&1 || echo 'Failed to read log'", logFile)
-		tailExecCmd := exec.CommandContext(ctx, "bash", "-c", tailCmd)
-		logTailBytes, _ := tailExecCmd.CombinedOutput()
-		logTail := string(logTailBytes)
-		return "failed", strings.TrimSpace(logTail), nil
-	}
-
-	// Check if log file exists
-	checkCmd := fmt.Sprintf("test -f %s && echo 'unknown' || echo 'not_found'", logFile)
-	checkExecCmd := exec.CommandContext(ctx, "bash", "-c", checkCmd)
-	outputBytes, err := checkExecCmd.CombinedOutput()
-	output := string(outputBytes)
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("database_name", database.Name).
-			Str("log_file", logFile).
-			Msg("Failed to check if restore log exists")
-		return "", "", fmt.Errorf("failed to check restore log: %w", err)
-	}
-
-	result := strings.TrimSpace(output)
-
-	logger.Debug().
-		Str("database_name", database.Name).
-		Str("result", result).
-		Msg("Restore log exists but no success/failure marker found yet")
-
-	// If status is unknown or failed, read the log tail for debugging
-	var logTail string
-	if result == "unknown" || result == "failed" {
-		tailCmd := fmt.Sprintf("tail -n 50 %s 2>&1 || echo 'Failed to read log'", logFile)
-		tailExecCmd := exec.CommandContext(ctx, "bash", "-c", tailCmd)
-		logTailBytes, err := tailExecCmd.CombinedOutput()
-		if err != nil {
-			logger.Warn().Err(err).Msg("Failed to read restore log tail")
-		} else {
-			logTail = strings.TrimSpace(string(logTailBytes))
-		}
-	}
-
-	logger.Debug().
-		Str("database_name", database.Name).
-		Str("restore_result", result).
-		Str("log_tail_length", fmt.Sprintf("%d", len(logTail))).
-		Msg("Got restore result")
-
-	return result, logTail, nil
 }
 
 // calculateNextRefresh calculates next refresh time from cron schedule
@@ -424,7 +425,6 @@ func applyAnonymizationRules(ctx context.Context, db *gorm.DB, config *models.Co
 	}
 
 	// Execute anonymization SQL on the database
-	// Must specify port since each PostgreSQL version runs on a different port
 	pgPort := postgresVersionToPort(config.PostgresVersion)
 	script := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
