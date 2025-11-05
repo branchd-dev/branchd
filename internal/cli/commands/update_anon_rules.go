@@ -53,7 +53,7 @@ func runUpdateAnonRules() error {
 			continue
 		}
 
-		fmt.Printf("Updating server '%s' (%s)... ", server.Alias, server.IP)
+		fmt.Printf("Updating anonymization rules on server '%s' (%s)... ", server.Alias, server.IP)
 
 		// Create API client
 		apiClient := client.New(server.IP)
