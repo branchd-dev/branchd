@@ -494,7 +494,7 @@ sudo ufw default allow outgoing
 sudo ufw allow 22/tcp comment 'SSH access'
 sudo ufw allow 80/tcp comment 'Caddy HTTP to HTTPS redirect'
 sudo ufw allow 443/tcp comment 'Caddy HTTPS (API + UI)'
-sudo ufw logging full
+sudo ufw logging low
 sudo ufw --force enable
 
 # Ensure UFW service starts on boot
