@@ -19,8 +19,6 @@ func NewUpdateCmd(version string) *cobra.Command {
 }
 
 func runUpdate(currentVersion string) error {
-	fmt.Println("Checking for updates...")
-
 	if err := update.SelfUpdate(currentVersion); err != nil {
 		return fmt.Errorf("update failed: %w", err)
 	}

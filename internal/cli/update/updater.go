@@ -26,8 +26,6 @@ func SelfUpdate(currentVersion string) error {
 		return nil
 	}
 
-	fmt.Printf("Updating from %s to %s...\n", currentVersion, latestVersion)
-
 	// Detect platform
 	binaryName, err := getBinaryName()
 	if err != nil {
@@ -35,7 +33,6 @@ func SelfUpdate(currentVersion string) error {
 	}
 
 	// Download new binary
-	fmt.Println("Downloading new version...")
 	downloadURL := fmt.Sprintf("%s/%s/%s", DownloadBaseURL, latestVersion, binaryName)
 
 	tmpFile, err := downloadFile(downloadURL)
@@ -45,7 +42,6 @@ func SelfUpdate(currentVersion string) error {
 	defer os.Remove(tmpFile)
 
 	// Download and verify checksum
-	fmt.Println("Verifying checksum...")
 	checksumURL := fmt.Sprintf("%s.sha256", downloadURL)
 	if err := verifyChecksum(tmpFile, checksumURL); err != nil {
 		return fmt.Errorf("checksum verification failed: %w", err)
@@ -64,12 +60,11 @@ func SelfUpdate(currentVersion string) error {
 	}
 
 	// Replace binary
-	fmt.Println("Installing new version...")
 	if err := replaceBinary(tmpFile, execPath); err != nil {
 		return fmt.Errorf("failed to install update: %w", err)
 	}
 
-	fmt.Printf("\n✓ Successfully updated to version %s!\n", latestVersion)
+	fmt.Printf("branchd updated to %s\n", latestVersion)
 
 	return nil
 }
