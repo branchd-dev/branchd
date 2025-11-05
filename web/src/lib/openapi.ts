@@ -566,6 +566,15 @@ export class Api<
         ...params,
       }),
 
+    restoresAnonymizeCreate: (id: string, params: RequestParams = {}) =>
+      this.request<Record<string, any>, Record<string, any>>({
+        path: `/api/restores/${id}/anonymize`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
     restoresLogsList: (
       id: string,
       query?: {

@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { useApi } from "../hooks/use-api";
-import type { GithubComBranchdDevBranchdInternalModelsAnonRule } from "../lib/openapi";
+import type {
+  GithubComBranchdDevBranchdInternalModelsAnonRule,
+  GithubComBranchdDevBranchdInternalModelsRestore,
+} from "../lib/openapi";
 import { Button } from "../shadcn/components/ui/button";
 import { Input } from "../shadcn/components/ui/input";
 import { Label } from "../shadcn/components/ui/label";
-import { Trash2, Plus, ShieldAlert, Info } from "lucide-react";
+import { Trash2, Plus, ShieldAlert, Info, Play } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -33,8 +36,16 @@ export function AnonRulesPage() {
   const [template, setTemplate] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Restores state
+  const [restores, setRestores] = useState<
+    GithubComBranchdDevBranchdInternalModelsRestore[]
+  >([]);
+  const [restoresLoading, setRestoresLoading] = useState(true);
+  const [applyingTo, setApplyingTo] = useState<string | null>(null);
+
   useEffect(() => {
     loadRules();
+    loadRestores();
   }, []);
 
   const loadRules = async () => {
@@ -88,6 +99,35 @@ export function AnonRulesPage() {
       await loadRules();
     } catch (err: any) {
       setError(err.error?.error || err.message || "Failed to delete rule");
+    }
+  };
+
+  const loadRestores = async () => {
+    try {
+      setRestoresLoading(true);
+      const response = await api.api.restoresList();
+      const data = await response.json();
+      setRestores(data || []);
+    } catch (err: any) {
+      console.error("Failed to load restores:", err);
+    } finally {
+      setRestoresLoading(false);
+    }
+  };
+
+  const handleApplyAnonymization = async (restoreId: string) => {
+    try {
+      setApplyingTo(restoreId);
+      setError(null);
+
+      const response = await api.api.restoresAnonymizeCreate(restoreId);
+      const result = await response.json();
+
+      alert(`Anonymization completed! ${result.rules_applied || 0} rules applied.`);
+    } catch (err: any) {
+      setError(err.error?.error || err.message || "Failed to apply anonymization");
+    } finally {
+      setApplyingTo(null);
     }
   };
 
@@ -303,6 +343,99 @@ export function AnonRulesPage() {
                         onClick={() => rule.id && handleDeleteRule(rule.id)}
                       >
                         <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-600" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+
+      {/* Apply Rules Section */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">Apply Rules to Databases</h2>
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription className="text-sm">
+            <p className="font-medium mb-2">Manual Anonymization</p>
+            <p className="text-gray-600">
+              Anonymization rules are automatically applied when a database is
+              restored. Use the buttons below to manually re-apply the current
+              rules to existing databases.
+            </p>
+          </AlertDescription>
+        </Alert>
+
+        {restoresLoading ? (
+          <div className="text-center py-8 text-gray-500">
+            <p>Loading databases...</p>
+          </div>
+        ) : restores.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <p className="font-medium">No databases available</p>
+            <p className="text-sm mt-1">
+              Create a database restore first to apply anonymization rules
+            </p>
+          </div>
+        ) : (
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Database Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="w-[150px]">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {restores.map((restore) => (
+                  <TableRow key={restore.id}>
+                    <TableCell className="font-mono text-sm">
+                      {restore.name}
+                    </TableCell>
+                    <TableCell>
+                      <span
+                        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                          restore.data_ready
+                            ? "bg-green-100 text-green-800"
+                            : "bg-yellow-100 text-yellow-800"
+                        }`}
+                      >
+                        {restore.data_ready ? "Ready" : "In Progress"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-sm text-gray-600">
+                      {restore.created_at
+                        ? new Date(restore.created_at).toLocaleString()
+                        : "N/A"}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          restore.id && handleApplyAnonymization(restore.id)
+                        }
+                        disabled={
+                          !restore.data_ready ||
+                          (applyingTo === restore.id) ||
+                          rules.length === 0
+                        }
+                      >
+                        {applyingTo === restore.id ? (
+                          <>
+                            <span className="animate-spin mr-2">⏳</span>
+                            Applying...
+                          </>
+                        ) : (
+                          <>
+                            <Play className="h-4 w-4 mr-2" />
+                            Apply Rules
+                          </>
+                        )}
                       </Button>
                     </TableCell>
                   </TableRow>

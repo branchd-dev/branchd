@@ -12,6 +12,7 @@ import (
 	"github.com/hibiken/asynq"
 	"gorm.io/gorm"
 
+	"github.com/branchd-dev/branchd/internal/anonymize"
 	"github.com/branchd-dev/branchd/internal/models"
 	"github.com/branchd-dev/branchd/internal/tasks"
 )
@@ -267,5 +268,84 @@ func (s *Server) getRestoreLogs(c *gin.Context) {
 		"logs":        logLines,
 		"total_lines": totalLines,
 		"exists":      true,
+	})
+}
+
+// postgresVersionToPort maps PostgreSQL major version to its port
+func postgresVersionToPort(version string) int {
+	switch version {
+	case "14":
+		return 5414
+	case "15":
+		return 5415
+	case "16":
+		return 5416
+	case "17":
+		return 5417
+	default:
+		// Default to 5432 for unknown versions
+		return 5432
+	}
+}
+
+// @Summary Apply anonymization rules to restore
+// @Description Manually trigger anonymization rules on a specific restore
+// @Tags restores
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Restore ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/restores/{id}/anonymize [post]
+func (s *Server) applyAnonymization(c *gin.Context) {
+	restoreID := c.Param("id")
+
+	// Find restore
+	var restore models.Restore
+	if err := s.db.Where("id = ?", restoreID).First(&restore).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Restore not found"})
+			return
+		}
+		s.logger.Error().Err(err).Str("restore_id", restoreID).Msg("Failed to find restore")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	// Load config to get PG version
+	var config models.Config
+	if err := s.db.First(&config).Error; err != nil {
+		s.logger.Error().Err(err).Msg("Failed to load config")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	s.logger.Info().
+		Str("restore_id", restoreID).
+		Str("restore_name", restore.Name).
+		Msg("Manually triggering anonymization")
+
+	// Apply anonymization rules
+	pgPort := postgresVersionToPort(config.PostgresVersion)
+	rulesApplied, err := anonymize.Apply(c.Request.Context(), s.db, anonymize.ApplyParams{
+		DatabaseName:    restore.Name,
+		PostgresVersion: config.PostgresVersion,
+		PostgresPort:    pgPort,
+	}, s.logger)
+	if err != nil {
+		s.logger.Error().Err(err).Str("restore_id", restoreID).Msg("Failed to apply anonymization")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to apply anonymization: %v", err)})
+		return
+	}
+
+	s.logger.Info().
+		Str("restore_id", restoreID).
+		Int("rules_applied", rulesApplied).
+		Msg("Anonymization completed successfully")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "Anonymization completed successfully",
+		"rules_applied": rulesApplied,
 	})
 }

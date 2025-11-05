@@ -260,6 +260,7 @@ func (s *Server) setupRouter() {
 		api.GET("/restores/:id/logs", s.getRestoreLogs)
 		api.DELETE("/restores/:id", s.deleteRestore)
 		api.POST("/restores/trigger-restore", s.triggerRestore)
+		api.POST("/restores/:id/anonymize", s.applyAnonymization)
 
 		// Anonymization rules (global)
 		api.GET("/anon-rules", s.listAnonRules)

@@ -304,7 +304,13 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 			Msg("Restore completed successfully")
 
 		// Apply anonymization rules before marking as ready
-		if err := applyAnonymizationRules(ctx, db, &config, &restoreModel, logger); err != nil {
+		pgPort := postgresVersionToPort(config.PostgresVersion)
+		_, err := anonymize.Apply(ctx, db, anonymize.ApplyParams{
+			DatabaseName:    restoreModel.Name,
+			PostgresVersion: config.PostgresVersion,
+			PostgresPort:    pgPort,
+		}, logger)
+		if err != nil {
 			logger.Error().Err(err).Msg("Failed to apply anonymization rules")
 			return fmt.Errorf("failed to apply anonymization rules: %w", err)
 		}
@@ -397,70 +403,3 @@ func calculateNextRefresh(cronExpr string, from time.Time) *time.Time {
 	return &next
 }
 
-// applyAnonymizationRules applies configured anonymization rules to a restored database
-func applyAnonymizationRules(ctx context.Context, db *gorm.DB, config *models.Config, database *models.Restore, logger zerolog.Logger) error {
-	// Load global anonymization rules
-	var rules []models.AnonRule
-	if err := db.Find(&rules).Error; err != nil {
-		return fmt.Errorf("failed to load anon rules: %w", err)
-	}
-
-	if len(rules) == 0 {
-		logger.Info().
-			Str("restore_id", database.ID).
-			Msg("No anonymization rules configured, skipping")
-		return nil
-	}
-
-	logger.Info().
-		Str("restore_id", database.ID).
-		Int("rule_count", len(rules)).
-		Msg("Applying anonymization rules")
-
-	// Generate SQL from rules
-	sql := anonymize.GenerateSQL(rules)
-	if sql == "" {
-		logger.Warn().Msg("Generated empty SQL from rules")
-		return nil
-	}
-
-	// Execute anonymization SQL on the database
-	pgPort := postgresVersionToPort(config.PostgresVersion)
-	script := fmt.Sprintf(`#!/bin/bash
-set -euo pipefail
-
-DATABASE_NAME="%s"
-PG_VERSION="%s"
-PG_PORT="%d"
-PG_BIN="/usr/lib/postgresql/${PG_VERSION}/bin"
-
-echo "Applying anonymization rules to database ${DATABASE_NAME}"
-
-# Execute anonymization SQL with correct port
-sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -d "${DATABASE_NAME}" <<'ANONYMIZE_SQL'
-%s
-ANONYMIZE_SQL
-
-echo "Anonymization completed successfully"
-`, database.Name, config.PostgresVersion, pgPort, sql)
-
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
-	outputBytes, err := cmd.CombinedOutput()
-	output := string(outputBytes)
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("output", output).
-			Str("database_name", database.Name).
-			Msg("Failed to execute anonymization script")
-		return fmt.Errorf("anonymization script execution failed: %w", err)
-	}
-
-	logger.Info().
-		Str("database_name", database.Name).
-		Int("rule_count", len(rules)).
-		Str("output", output).
-		Msg("Anonymization rules applied successfully")
-
-	return nil
-}

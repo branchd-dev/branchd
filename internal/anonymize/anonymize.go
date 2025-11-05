@@ -1,10 +1,14 @@
 package anonymize
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/branchd-dev/branchd/internal/models"
+	"github.com/rs/zerolog"
+	"gorm.io/gorm"
 )
 
 // GenerateSQL generates anonymization SQL from rules
@@ -95,4 +99,79 @@ func renderTemplate(template string) string {
 // quoteIdentifier quotes a PostgreSQL identifier
 func quoteIdentifier(name string) string {
 	return fmt.Sprintf("\"%s\"", strings.ReplaceAll(name, "\"", "\"\""))
+}
+
+// ApplyParams contains parameters needed to apply anonymization rules
+type ApplyParams struct {
+	DatabaseName   string
+	PostgresVersion string
+	PostgresPort   int
+}
+
+// Apply loads and applies anonymization rules to a database
+// Returns the number of rules applied and any error
+func Apply(ctx context.Context, db *gorm.DB, params ApplyParams, logger zerolog.Logger) (int, error) {
+	// Load all anonymization rules
+	var rules []models.AnonRule
+	if err := db.Find(&rules).Error; err != nil {
+		return 0, fmt.Errorf("failed to load anon rules: %w", err)
+	}
+
+	if len(rules) == 0 {
+		logger.Info().
+			Str("database_name", params.DatabaseName).
+			Msg("No anonymization rules configured, skipping")
+		return 0, nil
+	}
+
+	logger.Info().
+		Str("database_name", params.DatabaseName).
+		Int("rule_count", len(rules)).
+		Msg("Applying anonymization rules")
+
+	// Generate SQL from rules
+	sql := GenerateSQL(rules)
+	if sql == "" {
+		logger.Warn().Msg("Generated empty SQL from rules")
+		return 0, nil
+	}
+
+	// Execute anonymization SQL on the database
+	script := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+
+DATABASE_NAME="%s"
+PG_VERSION="%s"
+PG_PORT="%d"
+PG_BIN="/usr/lib/postgresql/${PG_VERSION}/bin"
+
+echo "Applying anonymization rules to database ${DATABASE_NAME}"
+
+# Execute anonymization SQL with correct port
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -d "${DATABASE_NAME}" <<'ANONYMIZE_SQL'
+%s
+ANONYMIZE_SQL
+
+echo "Anonymization completed successfully"
+`, params.DatabaseName, params.PostgresVersion, params.PostgresPort, sql)
+
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	outputBytes, err := cmd.CombinedOutput()
+	output := string(outputBytes)
+	if err != nil {
+		logger.Error().
+			Err(err).
+			Str("output", output).
+			Str("database_name", params.DatabaseName).
+			Msg("Failed to execute anonymization script")
+		return 0, fmt.Errorf("anonymization script execution failed: %w", err)
+	}
+
+	logger.Info().
+		Str("database_name", params.DatabaseName).
+		Int("rule_count", len(rules)).
+		Str("output", output).
+		Msg("Anonymization rules applied successfully")
+
+	return len(rules), nil
 }
