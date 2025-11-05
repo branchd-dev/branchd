@@ -711,6 +711,29 @@ func (s *Service) DeleteRestore(ctx context.Context, restore *models.Restore) er
 	// Kill any active restore process before dropping the database
 	s.killRestoreProcess(ctx, restore.Name)
 
+	// Terminate all active connections to the restore database
+	s.logger.Info().
+		Str("restore_name", restore.Name).
+		Msg("Terminating active connections to restore database")
+
+	terminateCmd := fmt.Sprintf(
+		"sudo -u postgres psql -p %d -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()\"",
+		port, restore.Name)
+	terminateExecCmd := exec.CommandContext(ctx, "bash", "-c", terminateCmd)
+	terminateOutput, terminateErr := terminateExecCmd.CombinedOutput()
+	if terminateErr != nil {
+		s.logger.Warn().
+			Err(terminateErr).
+			Str("restore_name", restore.Name).
+			Str("output", string(terminateOutput)).
+			Msg("Failed to terminate connections (will try to drop anyway)")
+	} else {
+		s.logger.Info().
+			Str("restore_name", restore.Name).
+			Str("output", string(terminateOutput)).
+			Msg("Terminated active connections to restore database")
+	}
+
 	// Drop restore database from PostgreSQL cluster
 	dropCmd := fmt.Sprintf("sudo -u postgres psql -p %d -c 'DROP DATABASE IF EXISTS \"%s\"'", port, restore.Name)
 	cmd := exec.CommandContext(ctx, "bash", "-c", dropCmd)
