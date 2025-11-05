@@ -26,88 +26,90 @@ echo "BRANCH_CREATION_STARTED=true"
 
 # Input parameters
 BRANCH_NAME="{{.BranchName}}"
-DATASET_NAME="{{.DatasetName}}"
+DATASET_NAME="{{.DatasetName}}"  # e.g., tank/restore_20250915120000
+RESTORE_PORT="{{.RestorePort}}"  # Port of the restore's PostgreSQL cluster
 USER="{{.User}}"
 PASSWORD="{{.Password}}"
 PG_VERSION="{{.PgVersion}}"
 CUSTOM_POSTGRESQL_CONF="{{.CustomPostgresqlConf}}"
 
 echo "DEBUG: Parameters loaded successfully"
-
-# Derive PostgreSQL port from version (hardcoded ports: PG14→5414, PG15→5415, etc.)
-RESTORE_PORT="54${PG_VERSION}"
-echo "DEBUG: PostgreSQL version ${PG_VERSION}, using port ${RESTORE_PORT}"
+echo "DEBUG: PostgreSQL version ${PG_VERSION}, restore port ${RESTORE_PORT}"
+echo "DEBUG: Cloning from restore dataset: ${DATASET_NAME}"
 
 # Configuration
 PORT_RANGE_START=15432
 PORT_RANGE_END=16432
 
 BRANCH_MOUNTPOINT="/opt/branchd/${BRANCH_NAME}"
-# Branch PostgreSQL data directory (in 'main' subdirectory after ZFS clone)
-BRANCH_PGDATA="${BRANCH_MOUNTPOINT}/main"
+# Branch PostgreSQL data directory (in 'data' subdirectory after ZFS clone from restore)
+BRANCH_PGDATA="${BRANCH_MOUNTPOINT}/data"
 PORT_ALLOCATION_LOCK="/tmp/branchd-port-allocation.lock"
 SERVICE_NAME="branchd-branch-${BRANCH_NAME}"
 
-echo "Creating branch: ${BRANCH_NAME} from dataset: ${DATASET_NAME}"
+echo "Creating branch: ${BRANCH_NAME}"
+echo "Source restore dataset: ${DATASET_NAME}"
+echo "Branch mountpoint: ${BRANCH_MOUNTPOINT}"
+echo "Branch data directory: ${BRANCH_PGDATA}"
 
 # Cleanup function to be called on exit
-# cleanup() {
-#     local exit_code=$?
-#     local signal_received=${1:-}
+cleanup() {
+    local exit_code=$?
+    local signal_received=${1:-}
 
-#     # Clean up if script failed OR was interrupted by signal
-#     if [ $exit_code -ne 0 ] || [ -n "$signal_received" ]; then
-#         if [ -n "$signal_received" ]; then
-#             echo "Script interrupted by signal $signal_received, cleaning up..."
-#         else
-#             echo "Script failed with exit code $exit_code, cleaning up..."
-#         fi
+    # Clean up if script failed OR was interrupted by signal
+    if [ $exit_code -ne 0 ] || [ -n "$signal_received" ]; then
+        if [ -n "$signal_received" ]; then
+            echo "Script interrupted by signal $signal_received, cleaning up..."
+        else
+            echo "Script failed with exit code $exit_code, cleaning up..."
+        fi
 
-#         # Stop and remove systemd service first
-#         # Check if service file exists (avoid pipefail issues with grep)
-#         if systemctl list-unit-files "${SERVICE_NAME}.service" 2>/dev/null | grep -q .; then
-#             echo "Stopping and removing systemd service..."
-#             sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-#             sudo systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-#             sudo rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-#             sudo systemctl daemon-reload
-#         fi
+        # Stop and remove systemd service first
+        # Check if service file exists (avoid pipefail issues with grep)
+        if systemctl list-unit-files "${SERVICE_NAME}.service" 2>/dev/null | grep -q .; then
+            echo "Stopping and removing systemd service..."
+            sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+            sudo systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+            sudo rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+            sudo systemctl daemon-reload
+        fi
 
-#         # Kill any remaining PostgreSQL processes for this branch
-#         if [ -n "${BRANCH_NAME:-}" ]; then
-#             echo "Killing any remaining PostgreSQL processes..."
-#             sudo pkill -f "postgres.*${BRANCH_NAME}" 2>/dev/null || true
-#             sleep 2  # Give processes time to exit
-#         fi
+        # Kill any remaining PostgreSQL processes for this branch
+        if [ -n "${BRANCH_NAME:-}" ]; then
+            echo "Killing any remaining PostgreSQL processes..."
+            sudo pkill -f "postgres.*${BRANCH_NAME}" 2>/dev/null || true
+            sleep 2  # Give processes time to exit
+        fi
 
-#         # Remove ZFS snapshot and any dependent clones recursively
-#         if sudo zfs list -t snapshot "${DATASET_NAME}@${BRANCH_NAME}" >/dev/null 2>&1; then
-#             echo "Removing ZFS snapshot and dependent clones..."
-#             sudo zfs destroy -R "${DATASET_NAME}@${BRANCH_NAME}" || echo "Warning: Failed to remove snapshot and clones"
+        # Remove ZFS snapshot and any dependent clones recursively
+        if sudo zfs list -t snapshot "${DATASET_NAME}@${BRANCH_NAME}" >/dev/null 2>&1; then
+            echo "Removing ZFS snapshot and dependent clones..."
+            sudo zfs destroy -R "${DATASET_NAME}@${BRANCH_NAME}" || echo "Warning: Failed to remove snapshot and clones"
 
-#             # Remove leftover mountpoint directory (zfs destroy unmounts but leaves directory)
-#             if [ -d "${BRANCH_MOUNTPOINT}" ]; then
-#                 echo "Removing mountpoint directory ${BRANCH_MOUNTPOINT}..."
-#                 sudo rmdir "${BRANCH_MOUNTPOINT}" 2>/dev/null || sudo rm -rf "${BRANCH_MOUNTPOINT}"
-#             fi
-#         fi
+            # Remove leftover mountpoint directory (zfs destroy unmounts but leaves directory)
+            if [ -d "${BRANCH_MOUNTPOINT}" ]; then
+                echo "Removing mountpoint directory ${BRANCH_MOUNTPOINT}..."
+                sudo rmdir "${BRANCH_MOUNTPOINT}" 2>/dev/null || sudo rm -rf "${BRANCH_MOUNTPOINT}"
+            fi
+        fi
 
-#         # Close UFW port if it was opened
-#         if [ -n "${AVAILABLE_PORT:-}" ]; then
-#             echo "Closing UFW port ${AVAILABLE_PORT}..."
-#             sudo ufw --force delete allow "${AVAILABLE_PORT}/tcp" 2>/dev/null || true
-#         fi
-#     fi
+        # Close UFW port if it was opened
+        if [ -n "${AVAILABLE_PORT:-}" ]; then
+            echo "Closing UFW port ${AVAILABLE_PORT}..."
+            sudo ufw --force delete allow "${AVAILABLE_PORT}/tcp" 2>/dev/null || true
+        fi
+    fi
 
-#     # Always remove lock files if we created them
-#     rm -f "${PORT_ALLOCATION_LOCK}" 2>/dev/null || true
-# }
+    # Always remove lock files if we created them
+    rm -f "${PORT_ALLOCATION_LOCK}" 2>/dev/null || true
+}
 
 # Signal handlers for graceful cleanup
-# cleanup_on_signal() {
-#     cleanup "$1"
-#     exit 1
-# }
+cleanup_on_signal() {
+    cleanup "$1"
+    exit 1
+}
 
 # Find available port with locking to prevent race conditions
 find_available_port() {

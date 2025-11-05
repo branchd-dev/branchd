@@ -144,9 +144,6 @@ cat <<'ZFSEOF' | sudo tee /usr/local/bin/create-tank-pool.sh >/dev/null
 #!/bin/bash
 set -e
 
-PG_VERSION="PG_VERSION_PLACEHOLDER"
-PG_PORT="PG_PORT_PLACEHOLDER"
-
 # Auto-create tank pool on boot if not exists
 if zpool status tank >/dev/null 2>&1; then
     echo "Tank pool already exists, skipping creation"
@@ -207,39 +204,16 @@ if zpool create -o autoexpand=on tank "$DATA_DEVICE"; then
     zfs set logbias=throughput tank
     zfs set mountpoint=/opt/branchd tank
 
-    echo "Creating ZFS dataset for PostgreSQL ${PG_VERSION}..."
-    zfs create tank/pg${PG_VERSION}
-    chown postgres:postgres /opt/branchd/pg${PG_VERSION}
-
-    echo "Creating PostgreSQL cluster on ZFS dataset..."
-    pg_createcluster --port ${PG_PORT} -d /opt/branchd/pg${PG_VERSION}/main ${PG_VERSION} main
-
-    echo "Adding ZFS dependencies to PostgreSQL service..."
-    mkdir -p /etc/systemd/system/postgresql@${PG_VERSION}-main.service.d
-    cat <<PGEOF > /etc/systemd/system/postgresql@${PG_VERSION}-main.service.d/zfs-dependency.conf
-[Unit]
-After=zfs-mount.service
-Requires=zfs-mount.service
-PGEOF
-    systemctl daemon-reload
-
-    echo "Enabling and starting PostgreSQL cluster..."
-    systemctl enable postgresql@${PG_VERSION}-main
-    systemctl start postgresql@${PG_VERSION}-main
-
-    echo "ZFS tank pool and PostgreSQL cluster created successfully"
+    echo "ZFS tank pool created successfully"
+    echo "PostgreSQL clusters will be created dynamically for each restore"
 else
     echo "ERROR: Failed to create ZFS pool"
     exit 1
 fi
 ZFSEOF
 
-# Replace placeholders in the script
-PG_PORT="54${PG_VERSION}"
-sudo sed -i "s/PG_VERSION_PLACEHOLDER/${PG_VERSION}/g" /usr/local/bin/create-tank-pool.sh
-sudo sed -i "s/PG_PORT_PLACEHOLDER/${PG_PORT}/g" /usr/local/bin/create-tank-pool.sh
 sudo chmod +x /usr/local/bin/create-tank-pool.sh
-echo "✓ ZFS pool creation script configured for PostgreSQL ${PG_VERSION}"
+echo "✓ ZFS pool creation script configured"
 
 # Create systemd service for ZFS pool auto-creation
 echo "Creating systemd service for ZFS pool auto-creation..."
@@ -977,7 +951,7 @@ fi
 
 echo "✓ Branchd systemd services created and enabled"
 
-echo "=== Creating ZFS Pool and PostgreSQL Cluster ==="
+echo "=== Creating ZFS Pool ==="
 
 # Execute ZFS pool creation script directly
 echo "Running ZFS pool creation script..."
@@ -988,7 +962,7 @@ if ! sudo /usr/local/bin/create-tank-pool.sh; then
     exit 1
 fi
 
-echo "✓ ZFS pool and PostgreSQL cluster created successfully"
+echo "✓ ZFS pool created successfully"
 
 echo "=== Starting Branchd Services ==="
 
@@ -1021,8 +995,8 @@ echo "=== Branchd Setup Complete! ==="
 echo "=========================================="
 echo ""
 echo "Summary:"
-echo "  ✓ PostgreSQL ${PG_VERSION} running (port 54${PG_VERSION})"
-echo "  ✓ ZFS pool 'tank' created and mounted"
+echo "  ✓ PostgreSQL ${PG_VERSION} binaries installed"
+echo "  ✓ ZFS pool 'tank' created and mounted at /opt/branchd"
 echo "  ✓ Security: fail2ban, UFW firewall active"
 echo "  ✓ Automatic updates: enabled (Sunday-only reboots at 3 AM)"
 echo "  ✓ Redis: running on localhost:6379"
@@ -1041,12 +1015,16 @@ echo "  1. Open the URL above in your browser"
 echo "  2. Complete first-time setup by creating an admin account"
 echo "  3. Configure your source PostgreSQL database"
 echo "  4. Start creating database branches!"
-
+echo ""
+echo "Architecture:"
+echo "  - Each restore creates its own PostgreSQL cluster with dynamic ports (50000+)"
+echo "  - Restores are stored as ZFS datasets: tank/restore_YYYYMMDDHHMMSS"
+echo "  - Branches are ZFS clones of restore datasets"
 echo ""
 echo "Useful commands:"
 echo "  - View server logs: journalctl -u branchd-server -f"
 echo "  - View worker logs: journalctl -u branchd-worker -f"
 echo "  - Check service status: systemctl status branchd-server branchd-worker"
 echo "  - Check ZFS pool: zpool status tank"
-echo "  - Check PostgreSQL: systemctl status postgresql@${PG_VERSION}-main"
+echo "  - List ZFS datasets: zfs list"
 echo ""

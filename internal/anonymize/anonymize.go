@@ -13,8 +13,8 @@ import (
 
 // TablePrimaryKey holds the primary key column for a table
 type TablePrimaryKey struct {
-	Table     string
-	PKColumn  string // Empty string means no PK found, will use ctid
+	Table    string
+	PKColumn string // Empty string means no PK found, will use ctid
 }
 
 // GenerateSQL generates anonymization SQL from rules
@@ -202,9 +202,9 @@ func quoteIdentifier(name string) string {
 
 // ApplyParams contains parameters needed to apply anonymization rules
 type ApplyParams struct {
-	DatabaseName   string
+	DatabaseName    string
 	PostgresVersion string
-	PostgresPort   int
+	PostgresPort    int
 }
 
 // Apply loads and applies anonymization rules to a database

@@ -66,12 +66,12 @@ func main() {
 	// Register task handlers
 	mux := asynq.NewServeMux()
 
-	// pg_dump/restore workflow tasks (local execution)
-	mux.HandleFunc(tasks.TypePgDumpRestoreExecute, func(ctx context.Context, t *asynq.Task) error {
-		return workers.HandlePgDumpRestoreExecute(ctx, t, asynqClient, db, cfg, log)
+	// Logical restore workflow tasks (local execution)
+	mux.HandleFunc(tasks.TypeTriggerLogicalRestore, func(ctx context.Context, t *asynq.Task) error {
+		return workers.HandleTriggerLogicalRestore(ctx, t, asynqClient, db, cfg, log)
 	})
-	mux.HandleFunc(tasks.TypePgDumpRestoreWaitComplete, func(ctx context.Context, t *asynq.Task) error {
-		return workers.HandlePgDumpRestoreWaitComplete(ctx, t, asynqClient, db, log)
+	mux.HandleFunc(tasks.TypeLogicalRestoreWaitComplete, func(ctx context.Context, t *asynq.Task) error {
+		return workers.HandleLogicalRestoreWaitComplete(ctx, t, asynqClient, db, log)
 	})
 
 	// Start refresh scheduler goroutine (checks every hour for instances needing refresh)

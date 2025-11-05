@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"text/template"
 	"time"
 
@@ -24,77 +25,87 @@ import (
 	"github.com/branchd-dev/branchd/internal/tasks"
 )
 
-//go:embed pg_dump_restore.sh
-var pgDumpRestoreScript string
+//go:embed logical_restore.sh
+var logicalRestoreScript string
 
-type pgDumpRestoreParams struct {
+type logicalRestoreParams struct {
 	ConnectionString string
 	PgVersion        string
-	PgPort           int
+	PgPort           int // Dynamic port for this restore's cluster
 	DatabaseName     string
 	SchemaOnly       string // "true" or "false" for template
 	ParallelJobs     int
 	DumpDir          string // Directory for pg_dump output (on EBS zpool)
+	DataDir          string // PostgreSQL data directory for initdb
 
 	// PostgreSQL tuning parameters
 	TuneSQL  []string // SQL statements to apply tuning
 	ResetSQL []string // SQL statements to reset tuning
 }
 
-// postgresVersionToPort maps PostgreSQL major version to its port
-func postgresVersionToPort(version string) int {
-	switch version {
-	case "14":
-		return 5414
-	case "15":
-		return 5415
-	case "16":
-		return 5416
-	case "17":
-		return 5417
-	default:
-		// Default to 5432 for unknown versions
-		return 5432
+// findAvailablePort finds an available port above 50000 for a new restore cluster
+func findAvailablePort(ctx context.Context, logger zerolog.Logger) (int, error) {
+	for port := 50000; port < 60000; port++ {
+		cmd := exec.CommandContext(ctx, "bash", "-c", fmt.Sprintf("ss -ln | grep -q ':%d ' && echo 'in_use' || echo 'available'", port))
+		output, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+
+		if strings.TrimSpace(string(output)) == "available" {
+			logger.Debug().Int("port", port).Msg("Found available port")
+			return port, nil
+		}
 	}
+
+	return 0, fmt.Errorf("no available ports in range 50000-60000")
 }
 
-// HandlePgDumpRestoreExecute starts the pg_dump/restore process for a database
+// HandleTriggerLogicalRestore starts the logical restore process for a database
 // The database record should already exist before this handler is called
-func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asynq.Client, db *gorm.DB, cfg *config.Config, logger zerolog.Logger) error {
+func HandleTriggerLogicalRestore(ctx context.Context, t *asynq.Task, client *asynq.Client, db *gorm.DB, cfg *config.Config, logger zerolog.Logger) error {
 	payload, err := tasks.ParseTaskPayload(t)
 	if err != nil {
 		return fmt.Errorf("failed to parse payload: %w", err)
 	}
 
-	// Load database
-	var database models.Restore
-	if err := db.Where("id = ?", payload.RestoreID).First(&database).Error; err != nil {
+	// Load dbRestore
+	var dbRestore models.Restore
+	if err := db.Where("id = ?", payload.RestoreID).First(&dbRestore).Error; err != nil {
 		return fmt.Errorf("failed to load database: %w", err)
 	}
 
-	// Load config (singleton)
+	// Load config
 	var configModel models.Config
 	if err := db.First(&configModel).Error; err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	logger.Info().
-		Str("restore_id", database.ID).
-		Bool("schema_only", database.SchemaOnly).
-		Msg("Starting pg_dump/restore process")
+		Str("restore_id", dbRestore.ID).
+		Bool("schema_only", dbRestore.SchemaOnly).
+		Msg("Starting restore process")
 
 	// Create orchestrator
 	orchestrator := restore.NewOrchestrator(logger)
 
-	// Calculate port
-	pgPort := postgresVersionToPort(configModel.PostgresVersion)
+	// 1. Find available port for this restore's PostgreSQL cluster
+	pgPort, err := findAvailablePort(ctx, logger)
+	if err != nil {
+		return fmt.Errorf("failed to find available port: %w", err)
+	}
 
-	// 1. Validate inputs
+	// Store port in database
+	if err := db.Model(&dbRestore).Update("port", pgPort).Error; err != nil {
+		return fmt.Errorf("failed to store port in database: %w", err)
+	}
+
+	// 2. Validate inputs
 	if err := orchestrator.ValidateInputs(
 		configModel.ConnectionString,
 		configModel.PostgresVersion,
 		pgPort,
-		database.Name,
+		dbRestore.Name,
 	); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
@@ -105,7 +116,7 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 	}
 
 	// 3. Check if restore is already in progress
-	isRunning, pid, err := orchestrator.CheckIfRestoreInProgress(ctx, database.Name)
+	isRunning, pid, err := orchestrator.CheckIfRestoreInProgress(ctx, dbRestore.Name)
 	if err != nil {
 		return fmt.Errorf("failed to check restore status: %w", err)
 	}
@@ -113,11 +124,11 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 	if isRunning {
 		logger.Info().
 			Int("pid", pid).
-			Str("restore_id", database.ID).
+			Str("restore_id", dbRestore.ID).
 			Msg("Restore is already running, skipping")
 
 		// Enqueue wait task to monitor existing restore
-		waitTask, err := tasks.NewPgDumpRestoreWaitCompleteTask(database.ID)
+		waitTask, err := tasks.NewTriggerLogicalRestoreWaitCompleteTask(dbRestore.ID)
 		if err != nil {
 			return fmt.Errorf("failed to create wait complete task: %w", err)
 		}
@@ -141,46 +152,43 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 
 	tuning := pgtuning.CalculateOptimalSettings(resources)
 
-	logger.Info().
-		Int("cpu_cores", resources.CPUCores).
-		Int("parallel_jobs", tuning.ParallelJobs).
-		Str("maintenance_work_mem", tuning.MaintenanceWorkMem).
-		Str("max_wal_size", tuning.MaxWalSize).
-		Msg("Calculated optimal restore settings")
-
-	// 5. Calculate dump directory path (on zpool EBS volume)
-	// Use restore name which follows pattern: restore_{datetime}
-	dumpDir := fmt.Sprintf("/opt/branchd/%s", database.Name)
+	// 5. Calculate paths for restore cluster
+	// Each restore gets its own ZFS dataset: tank/restore_YYYYMMDDHHMMSS
+	// Mounted at: /opt/branchd/restore_YYYYMMDDHHMMSS
+	restoreDatasetPath := fmt.Sprintf("/opt/branchd/%s", dbRestore.Name)
+	dataDir := fmt.Sprintf("%s/data", restoreDatasetPath)        // PostgreSQL data directory
+	dumpDir := fmt.Sprintf("%s/dump.pgdump", restoreDatasetPath) // pg_dump output file
 
 	// 6. Render and execute restore script
 	schemaOnlyStr := "false"
-	if database.SchemaOnly {
+	if dbRestore.SchemaOnly {
 		schemaOnlyStr = "true"
 	}
 
-	scriptParams := pgDumpRestoreParams{
+	scriptParams := logicalRestoreParams{
 		ConnectionString: configModel.ConnectionString,
 		PgVersion:        configModel.PostgresVersion,
 		PgPort:           pgPort,
-		DatabaseName:     database.Name,
+		DatabaseName:     dbRestore.Name,
 		SchemaOnly:       schemaOnlyStr,
 		ParallelJobs:     tuning.ParallelJobs,
 		DumpDir:          dumpDir,
+		DataDir:          dataDir,
 		TuneSQL:          tuning.GenerateAlterSystemSQL(),
 		ResetSQL:         pgtuning.GenerateResetSQL(),
 	}
 
-	script, err := renderPgDumpRestoreScript(scriptParams)
+	script, err := renderLogicalRestoreScript(scriptParams)
 	if err != nil {
-		return fmt.Errorf("failed to render pg_dump restore script: %w", err)
+		return fmt.Errorf("failed to render logical restore script: %w", err)
 	}
 
 	// Start the restore script in background using nohup
-	logFile := orchestrator.GetLogFilePath(database.Name)
-	pidFile := orchestrator.GetPIDFilePath(database.Name)
+	logFile := orchestrator.GetLogFilePath(dbRestore.Name)
+	pidFile := orchestrator.GetPIDFilePath(dbRestore.Name)
 
 	// Write script to a temporary file to avoid shell quoting issues
-	scriptPath := fmt.Sprintf("/tmp/branchd_restore_%s.sh", database.Name)
+	scriptPath := fmt.Sprintf("/tmp/branchd_restore_%s.sh", dbRestore.Name)
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		return fmt.Errorf("failed to write restore script: %w", err)
 	}
@@ -199,16 +207,8 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 		return fmt.Errorf("restore script execution failed: %w", err)
 	}
 
-	logger.Info().
-		Str("restore_id", database.ID).
-		Bool("schema_only", database.SchemaOnly).
-		Int("parallel_jobs", tuning.ParallelJobs).
-		Int("data_phase_jobs", tuning.ParallelJobs+2).
-		Str("dump_dir", dumpDir).
-		Msg("Three-phase restore started in background - data phase will use +2 workers")
-
 	// 7. Enqueue WaitComplete task to poll for completion
-	waitTask, err := tasks.NewPgDumpRestoreWaitCompleteTask(database.ID)
+	waitTask, err := tasks.NewTriggerLogicalRestoreWaitCompleteTask(dbRestore.ID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to create wait complete task")
 		return fmt.Errorf("failed to create wait complete task: %w", err)
@@ -225,15 +225,15 @@ func HandlePgDumpRestoreExecute(ctx context.Context, t *asynq.Task, client *asyn
 	}
 
 	logger.Info().
-		Str("restore_id", database.ID).
-		Msg("Restore execute task completed - waiting for background process")
+		Str("restore_id", dbRestore.ID).
+		Msg("Restore triggered")
 
 	return nil
 }
 
-// HandlePgDumpRestoreWaitComplete polls for pg_dump/restore completion
+// HandleLogicalRestoreWaitComplete polls for logical restore completion
 // This handler only waits for restore to complete and marks database as ready
-func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client *asynq.Client, db *gorm.DB, logger zerolog.Logger) error {
+func HandleLogicalRestoreWaitComplete(ctx context.Context, t *asynq.Task, client *asynq.Client, db *gorm.DB, logger zerolog.Logger) error {
 	payload, err := tasks.ParseTaskPayload(t)
 	if err != nil {
 		return fmt.Errorf("failed to parse payload: %w", err)
@@ -255,7 +255,7 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 		Str("restore_id", restoreModel.ID).
 		Str("restore_name", restoreModel.Name).
 		Bool("schema_only", restoreModel.SchemaOnly).
-		Msg("Checking pg_dump/restore status")
+		Msg("Checking logical restore status")
 
 	// Create orchestrator
 	orchestrator := restore.NewOrchestrator(logger)
@@ -272,7 +272,7 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 			Msg("Restore still running - scheduling next check in 10 seconds")
 
 		// Enqueue another WaitComplete task
-		waitTask, err := tasks.NewPgDumpRestoreWaitCompleteTask(restoreModel.ID)
+		waitTask, err := tasks.NewTriggerLogicalRestoreWaitCompleteTask(restoreModel.ID)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to create wait complete task")
 			return fmt.Errorf("failed to create wait complete task: %w", err)
@@ -304,11 +304,11 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 			Msg("Restore completed successfully")
 
 		// Apply anonymization rules before marking as ready
-		pgPort := postgresVersionToPort(config.PostgresVersion)
+		// Use the restore's allocated port
 		_, err := anonymize.Apply(ctx, db, anonymize.ApplyParams{
 			DatabaseName:    restoreModel.Name,
 			PostgresVersion: config.PostgresVersion,
-			PostgresPort:    pgPort,
+			PostgresPort:    restoreModel.Port,
 		}, logger)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to apply anonymization rules")
@@ -372,8 +372,8 @@ func HandlePgDumpRestoreWaitComplete(ctx context.Context, t *asynq.Task, client 
 	}
 }
 
-func renderPgDumpRestoreScript(params pgDumpRestoreParams) (string, error) {
-	tmpl, err := template.New("pg-dump-restore").Parse(pgDumpRestoreScript)
+func renderLogicalRestoreScript(params logicalRestoreParams) (string, error) {
+	tmpl, err := template.New("logical-restore").Parse(logicalRestoreScript)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse script template: %w", err)
 	}
@@ -402,4 +402,3 @@ func calculateNextRefresh(cronExpr string, from time.Time) *time.Time {
 	next := schedule.Next(from)
 	return &next
 }
-

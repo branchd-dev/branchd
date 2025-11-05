@@ -18,11 +18,11 @@ const (
 )
 
 var (
-	ErrMissingAuthHeader  = errors.New("missing authorization header")
-	ErrInvalidAuthFormat  = errors.New("invalid authorization header format")
-	ErrEmptyToken         = errors.New("empty token")
-	ErrInvalidToken       = errors.New("invalid token")
-	ErrUserNotFound       = errors.New("user not found")
+	ErrMissingAuthHeader = errors.New("missing authorization header")
+	ErrInvalidAuthFormat = errors.New("invalid authorization header format")
+	ErrEmptyToken        = errors.New("empty token")
+	ErrInvalidToken      = errors.New("invalid token")
+	ErrUserNotFound      = errors.New("user not found")
 )
 
 func setSession(c *gin.Context, sessionData *auth.SessionData) {

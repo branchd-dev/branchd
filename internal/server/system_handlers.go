@@ -28,12 +28,12 @@ type VMMetrics = sysinfo.Metrics
 
 // DatabaseMetrics contains source database information
 type DatabaseMetrics struct {
-	Name          string  `json:"name"`
-	Version       string  `json:"version"`
-	MajorVersion  int     `json:"major_version"`
-	SizeGB        float64 `json:"size_gb"`
-	Connected     bool    `json:"connected"`
-	Error         string  `json:"error,omitempty"`
+	Name         string  `json:"name"`
+	Version      string  `json:"version"`
+	MajorVersion int     `json:"major_version"`
+	SizeGB       float64 `json:"size_gb"`
+	Connected    bool    `json:"connected"`
+	Error        string  `json:"error,omitempty"`
 }
 
 // @Summary Get system and source database information
@@ -103,8 +103,8 @@ func (s *Server) getSourceDatabaseMetrics(ctx context.Context, connectionString,
 
 // LatestVersionResponse contains the latest available version from GitHub
 type LatestVersionResponse struct {
-	LatestVersion  string `json:"latest_version"`
-	CurrentVersion string `json:"current_version"`
+	LatestVersion   string `json:"latest_version"`
+	CurrentVersion  string `json:"current_version"`
 	UpdateAvailable bool   `json:"update_available"`
 }
 
@@ -194,7 +194,7 @@ func (s *Server) updateServer(c *gin.Context) {
 	go s.performUpdate(latestVersion)
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":        "Update initiated - server will restart in a few seconds",
+		"message":         "Update initiated - server will restart in a few seconds",
 		"current_version": s.version,
 		"new_version":     latestVersion,
 	})

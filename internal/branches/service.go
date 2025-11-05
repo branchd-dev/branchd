@@ -110,7 +110,8 @@ type CreateBranchParams struct {
 
 type branchScriptParams struct {
 	BranchName           string
-	DatasetName          string
+	DatasetName          string // Restore's ZFS dataset (e.g., tank/restore_20250915120000)
+	RestorePort          int    // Port of the restore's PostgreSQL cluster
 	User                 string
 	Password             string
 	PgVersion            string
@@ -216,11 +217,12 @@ func (s *Service) executeBranchCreation(ctx context.Context, config *models.Conf
 	assert.Length(password, 32) // 32-char password
 
 	// Execute branch creation script (includes ZFS clone, service start, user creation)
-	// Use PostgreSQL version cluster dataset (e.g., tank/pg16)
-	datasetName := fmt.Sprintf("tank/pg%s", config.PostgresVersion)
+	// Clone from restore's ZFS dataset (e.g., tank/restore_20250915120000)
+	restoreDatasetName := fmt.Sprintf("tank/%s", restore.Name)
 	scriptParams := branchScriptParams{
 		BranchName:           params.BranchName,
-		DatasetName:          datasetName,
+		DatasetName:          restoreDatasetName,
+		RestorePort:          restore.Port,
 		User:                 user,
 		Password:             password,
 		PgVersion:            config.PostgresVersion,
@@ -411,11 +413,12 @@ func (s *Service) executeBranchCreationWithForcedPort(ctx context.Context, confi
 	assert.Length(password, 32) // 32-char password
 
 	// Execute branch creation script with FORCE_PORT environment variable
-	// Use PostgreSQL version cluster dataset (e.g., tank/pg16)
-	datasetName := fmt.Sprintf("tank/pg%s", config.PostgresVersion)
+	// Clone from restore's ZFS dataset (e.g., tank/restore_20250915120000)
+	restoreDatasetName := fmt.Sprintf("tank/%s", restore.Name)
 	scriptParams := branchScriptParams{
 		BranchName:           params.BranchName,
-		DatasetName:          datasetName,
+		DatasetName:          restoreDatasetName,
+		RestorePort:          restore.Port,
 		User:                 user,
 		Password:             password,
 		PgVersion:            config.PostgresVersion,
@@ -537,12 +540,19 @@ func (s *Service) DeleteBranch(ctx context.Context, params DeleteBranchParams) e
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
+	// Load restore to get dataset name
+	var restore models.Restore
+	if err := s.db.Where("id = ?", branch.RestoreID).First(&restore).Error; err != nil {
+		s.logger.Error().Err(err).Str("restore_id", branch.RestoreID).Msg("Failed to load restore")
+		return fmt.Errorf("failed to load restore: %w", err)
+	}
+
 	// Render deletion script
-	// Use PostgreSQL version cluster dataset (e.g., tank/pg16)
-	datasetName := fmt.Sprintf("tank/pg%s", config.PostgresVersion)
+	// Clone from restore's ZFS dataset (e.g., tank/restore_20250915120000)
+	restoreDatasetName := fmt.Sprintf("tank/%s", restore.Name)
 	scriptParams := deleteBranchScriptParams{
 		BranchName:  params.BranchName,
-		DatasetName: datasetName,
+		DatasetName: restoreDatasetName,
 	}
 
 	tmpl, err := template.New("delete-branch").Parse(destroyBranchScript)
@@ -683,80 +693,72 @@ func (s *Service) killRestoreProcess(ctx context.Context, restoreName string) {
 	}
 }
 
-// DeleteRestore deletes a restore from the main cluster
+// DeleteRestore deletes a restore cluster and its ZFS dataset
 func (s *Service) DeleteRestore(ctx context.Context, restore *models.Restore) error {
-	// Load config to get PostgreSQL version
-	var config models.Config
-	if err := s.db.First(&config).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return fmt.Errorf("configuration not found")
-		}
-		s.logger.Error().Err(err).Msg("Failed to load config")
-		return fmt.Errorf("failed to load config: %w", err)
-	}
+	s.logger.Info().
+		Str("restore_id", restore.ID).
+		Str("restore_name", restore.Name).
+		Int("port", restore.Port).
+		Msg("Deleting restore cluster and dataset")
 
-	// Map PostgreSQL version to port
-	portMap := map[string]int{
-		"14": 5414,
-		"15": 5415,
-		"16": 5416,
-		"17": 5417,
-	}
+	serviceName := fmt.Sprintf("branchd-restore-%s", restore.Name)
+	zfsDataset := fmt.Sprintf("tank/%s", restore.Name)
 
-	port, ok := portMap[config.PostgresVersion]
-	if !ok {
-		return fmt.Errorf("unsupported PostgreSQL version: %s", config.PostgresVersion)
-	}
-
-	// Kill any active restore process before dropping the database
+	// Kill any active restore process
 	s.killRestoreProcess(ctx, restore.Name)
 
-	// Terminate all active connections to the restore database
-	s.logger.Info().
-		Str("restore_name", restore.Name).
-		Msg("Terminating active connections to restore database")
-
-	terminateCmd := fmt.Sprintf(
-		"sudo -u postgres psql -p %d -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()\"",
-		port, restore.Name)
-	terminateExecCmd := exec.CommandContext(ctx, "bash", "-c", terminateCmd)
-	terminateOutput, terminateErr := terminateExecCmd.CombinedOutput()
-	if terminateErr != nil {
+	// 1. Stop and disable systemd service
+	s.logger.Info().Str("service", serviceName).Msg("Stopping PostgreSQL service")
+	stopCmd := fmt.Sprintf("sudo systemctl stop %s || true", serviceName)
+	cmd := exec.CommandContext(ctx, "bash", "-c", stopCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
 		s.logger.Warn().
-			Err(terminateErr).
-			Str("restore_name", restore.Name).
-			Str("output", string(terminateOutput)).
-			Msg("Failed to terminate connections (will try to drop anyway)")
-	} else {
-		s.logger.Info().
-			Str("restore_name", restore.Name).
-			Str("output", string(terminateOutput)).
-			Msg("Terminated active connections to restore database")
+			Err(err).
+			Str("output", string(output)).
+			Msg("Failed to stop service (continuing anyway)")
 	}
 
-	// Drop restore database from PostgreSQL cluster
-	dropCmd := fmt.Sprintf("sudo -u postgres psql -p %d -c 'DROP DATABASE IF EXISTS \"%s\"'", port, restore.Name)
-	cmd := exec.CommandContext(ctx, "bash", "-c", dropCmd)
+	disableCmd := fmt.Sprintf("sudo systemctl disable %s || true", serviceName)
+	cmd = exec.CommandContext(ctx, "bash", "-c", disableCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		s.logger.Warn().
+			Err(err).
+			Str("output", string(output)).
+			Msg("Failed to disable service (continuing anyway)")
+	}
+
+	// 2. Remove systemd service file
+	s.logger.Info().Msg("Removing systemd service file")
+	serviceFile := fmt.Sprintf("/etc/systemd/system/%s.service", serviceName)
+	removeServiceCmd := fmt.Sprintf("sudo rm -f %s && sudo systemctl daemon-reload", serviceFile)
+	cmd = exec.CommandContext(ctx, "bash", "-c", removeServiceCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		s.logger.Warn().
+			Err(err).
+			Str("output", string(output)).
+			Msg("Failed to remove service file (continuing anyway)")
+	}
+
+	// 3. Destroy ZFS dataset (includes all data)
+	s.logger.Info().Str("zfs_dataset", zfsDataset).Msg("Destroying ZFS dataset")
+	destroyCmd := fmt.Sprintf("sudo zfs destroy -r %s", zfsDataset)
+	cmd = exec.CommandContext(ctx, "bash", "-c", destroyCmd)
 	outputBytes, err := cmd.CombinedOutput()
 	output := string(outputBytes)
 	if err != nil {
 		s.logger.Error().
 			Err(err).
-			Str("restore_name", restore.Name).
+			Str("zfs_dataset", zfsDataset).
 			Str("output", output).
-			Msg("Failed to drop restore from PostgreSQL")
-		return fmt.Errorf("failed to drop restore from PostgreSQL: %w", err)
+			Msg("Failed to destroy ZFS dataset")
+		return fmt.Errorf("failed to destroy ZFS dataset: %w", err)
 	}
 
 	s.logger.Info().
-		Str("restore_name", restore.Name).
-		Int("port", port).
-		Msg("Restore dropped from PostgreSQL cluster")
+		Str("zfs_dataset", zfsDataset).
+		Msg("ZFS dataset destroyed successfully")
 
-	// Note: Restores are logical databases in the main cluster, not separate ZFS datasets.
-	// No ZFS cleanup needed - branches are cloned from the main pg version dataset (e.g., tank/pg16).
-
-	// Delete restore record from SQLite
+	// 4. Delete restore record from SQLite
 	if err := s.db.Delete(restore).Error; err != nil {
 		s.logger.Error().
 			Err(err).

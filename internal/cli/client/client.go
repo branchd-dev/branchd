@@ -323,4 +323,3 @@ func (c *Client) UpdateAnonRules(serverIP string, rules []AnonRule) error {
 
 	return nil
 }
-

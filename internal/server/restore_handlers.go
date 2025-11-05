@@ -153,7 +153,7 @@ func (s *Server) triggerRestore(c *gin.Context) {
 	}
 
 	// Enqueue restore task
-	restoreTask, err := tasks.NewPgDumpRestoreExecuteTask(restore.ID)
+	restoreTask, err := tasks.NewTriggerLogicalRestoreTask(restore.ID)
 	if err != nil {
 		s.logger.Error().Err(err).Str("restore_id", restore.ID).Msg("Failed to create restore task")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start restore"})

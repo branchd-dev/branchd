@@ -11,46 +11,69 @@ import (
 	"github.com/branchd-dev/branchd/internal/models"
 )
 
-// deleteRestore deletes a restore database from PostgreSQL cluster and removes its record
+// deleteRestore stops the restore's PostgreSQL cluster, removes its ZFS dataset, and deletes the record
 func deleteRestore(ctx context.Context, db *gorm.DB, restore *models.Restore, logger zerolog.Logger) error {
 	logger.Info().
 		Str("restore_id", restore.ID).
 		Str("restore_name", restore.Name).
-		Msg("Deleting restore")
+		Int("port", restore.Port).
+		Msg("Deleting restore cluster and dataset")
 
-	// Load config to get PostgreSQL version
-	var config models.Config
-	if err := db.First(&config).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return fmt.Errorf("configuration not found")
-		}
-		logger.Error().Err(err).Msg("Failed to load config")
-		return fmt.Errorf("failed to load config: %w", err)
+	serviceName := fmt.Sprintf("branchd-restore-%s", restore.Name)
+	zfsDataset := fmt.Sprintf("tank/%s", restore.Name)
+
+	// 1. Stop and disable systemd service
+	logger.Info().Str("service", serviceName).Msg("Stopping PostgreSQL service")
+	stopCmd := fmt.Sprintf("sudo systemctl stop %s || true", serviceName)
+	cmd := exec.CommandContext(ctx, "bash", "-c", stopCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		logger.Warn().
+			Err(err).
+			Str("output", string(output)).
+			Msg("Failed to stop service (continuing anyway)")
 	}
 
-	// Map PostgreSQL version to port
-	port := postgresVersionToPort(config.PostgresVersion)
+	disableCmd := fmt.Sprintf("sudo systemctl disable %s || true", serviceName)
+	cmd = exec.CommandContext(ctx, "bash", "-c", disableCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		logger.Warn().
+			Err(err).
+			Str("output", string(output)).
+			Msg("Failed to disable service (continuing anyway)")
+	}
 
-	// Drop restore database from PostgreSQL cluster
-	dropCmd := fmt.Sprintf("sudo -u postgres psql -p %d -c 'DROP DATABASE IF EXISTS \"%s\"'", port, restore.Name)
-	cmd := exec.CommandContext(ctx, "bash", "-c", dropCmd)
+	// 2. Remove systemd service file
+	logger.Info().Msg("Removing systemd service file")
+	serviceFile := fmt.Sprintf("/etc/systemd/system/%s.service", serviceName)
+	removeServiceCmd := fmt.Sprintf("sudo rm -f %s && sudo systemctl daemon-reload", serviceFile)
+	cmd = exec.CommandContext(ctx, "bash", "-c", removeServiceCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		logger.Warn().
+			Err(err).
+			Str("output", string(output)).
+			Msg("Failed to remove service file (continuing anyway)")
+	}
+
+	// 3. Destroy ZFS dataset (includes all data)
+	logger.Info().Str("zfs_dataset", zfsDataset).Msg("Destroying ZFS dataset")
+	destroyCmd := fmt.Sprintf("sudo zfs destroy -r %s", zfsDataset)
+	cmd = exec.CommandContext(ctx, "bash", "-c", destroyCmd)
 	outputBytes, err := cmd.CombinedOutput()
 	output := string(outputBytes)
 	if err != nil {
 		logger.Error().
 			Err(err).
-			Str("restore_name", restore.Name).
+			Str("zfs_dataset", zfsDataset).
 			Str("output", output).
-			Msg("Failed to drop restore from PostgreSQL")
-		return fmt.Errorf("failed to drop restore from PostgreSQL: %w", err)
+			Msg("Failed to destroy ZFS dataset")
+		return fmt.Errorf("failed to destroy ZFS dataset: %w", err)
 	}
 
 	logger.Info().
-		Str("restore_name", restore.Name).
-		Int("port", port).
-		Msg("Restore dropped from PostgreSQL cluster")
+		Str("zfs_dataset", zfsDataset).
+		Msg("ZFS dataset destroyed successfully")
 
-	// Delete restore record from SQLite
+	// 4. Delete restore record from SQLite
 	if err := db.Delete(restore).Error; err != nil {
 		logger.Error().
 			Err(err).
