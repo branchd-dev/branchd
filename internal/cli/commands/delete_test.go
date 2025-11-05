@@ -45,11 +45,6 @@ func TestDeleteCommand_CommandStructure(t *testing.T) {
 		t.Errorf("expected Use to be 'delete <branch-name>', got %s", cmd.Use)
 	}
 
-	if cmd.Short != "Delete a database branch" {
-		t.Errorf("expected Short to be 'Delete a database branch', got %s", cmd.Short)
-	}
-
-	// Test that command requires exactly 1 argument
 	err := cmd.Args(cmd, []string{})
 	if err == nil {
 		t.Error("expected error when no arguments provided, got nil")

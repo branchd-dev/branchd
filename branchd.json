@@ -2,11 +2,7 @@
   "servers": [
     {
       "ip": "18.188.232.134",
-      "alias": "production"
-    },
-    {
-      "ip": "18.229.145.204",
-      "alias": "server-2"
+      "alias": "testing server"
     }
   ]
 }
