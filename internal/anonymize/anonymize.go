@@ -11,9 +11,16 @@ import (
 	"gorm.io/gorm"
 )
 
+// TablePrimaryKey holds the primary key column for a table
+type TablePrimaryKey struct {
+	Table     string
+	PKColumn  string // Empty string means no PK found, will use ctid
+}
+
 // GenerateSQL generates anonymization SQL from rules
 // Uses PostgreSQL row_number() for deterministic anonymization
-func GenerateSQL(rules []models.AnonRule) string {
+// primaryKeys maps table names to their primary key columns for consistent ordering
+func GenerateSQL(rules []models.AnonRule, primaryKeys map[string]string) string {
 	if len(rules) == 0 {
 		return ""
 	}
@@ -27,43 +34,99 @@ func GenerateSQL(rules []models.AnonRule) string {
 	var sqlStatements []string
 
 	for table, rules := range tableRules {
-		sql := generateTableUpdateSQL(table, rules)
+		pkColumn := primaryKeys[table] // Empty string if not found
+		sql := generateTableUpdateSQL(table, rules, pkColumn)
 		sqlStatements = append(sqlStatements, sql)
 	}
 
 	return strings.Join(sqlStatements, "\n\n")
 }
 
+// generatePrimaryKeyQuerySQL generates SQL to query primary keys for all tables
+func generatePrimaryKeyQuerySQL(tables []string) string {
+	if len(tables) == 0 {
+		return ""
+	}
+
+	// Build SQL to find primary key columns for all tables
+	// Returns: table_name | column_name (one row per table with single-column PK)
+	quotedTables := make([]string, len(tables))
+	for i, table := range tables {
+		quotedTables[i] = fmt.Sprintf("'%s'", strings.ReplaceAll(table, "'", "''"))
+	}
+
+	sql := fmt.Sprintf(`
+SELECT
+    t.tablename as table_name,
+    a.attname as column_name
+FROM pg_tables t
+JOIN pg_class c ON c.relname = t.tablename
+JOIN pg_index i ON i.indrelid = c.oid AND i.indisprimary
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+WHERE t.schemaname = 'public'
+  AND t.tablename IN (%s)
+  AND array_length(i.indkey, 1) = 1  -- Only single-column primary keys
+ORDER BY t.tablename;
+`, strings.Join(quotedTables, ", "))
+
+	return sql
+}
+
 // generateTableUpdateSQL generates UPDATE statement for a single table
-func generateTableUpdateSQL(table string, rules []models.AnonRule) string {
+// pkColumn is the primary key column name (empty string means use ctid)
+func generateTableUpdateSQL(table string, rules []models.AnonRule, pkColumn string) string {
 	if len(rules) == 0 {
 		return ""
 	}
 
-	// Build SET clause with row_number replacement
-	var setClauses []string
-	for _, rule := range rules {
-		// Replace ${index} with row number in the template
-		// Use row_number() OVER (ORDER BY primary key or ctid for deterministic ordering)
-		setValue := renderTemplate(rule.Template)
-		setClauses = append(setClauses, fmt.Sprintf("%s = %s", quoteIdentifier(rule.Column), setValue))
+	// Determine ordering: use primary key if available, otherwise ctid
+	var orderBy string
+	var orderByComment string
+	if pkColumn != "" {
+		orderBy = quoteIdentifier(pkColumn)
+		orderByComment = fmt.Sprintf(" (ordered by PK: %s)", pkColumn)
+	} else {
+		orderBy = "ctid"
+		orderByComment = " (ordered by ctid - no PK found)"
 	}
 
+	// Build SET clause with row_number replacement and IS DISTINCT FROM for idempotency
+	var setClauses []string
+	var whereConditions []string
+	for _, rule := range rules {
+		setValue := renderTemplate(rule.Template)
+		columnQuoted := quoteIdentifier(rule.Column)
+
+		// Add SET clause
+		setClauses = append(setClauses, fmt.Sprintf("%s = %s", columnQuoted, setValue))
+
+		// Add condition to skip rows that already have the target value (idempotency)
+		whereConditions = append(whereConditions, fmt.Sprintf("%s.%s IS DISTINCT FROM %s",
+			quoteIdentifier(table), columnQuoted, setValue))
+	}
+
+	// Combine WHERE conditions with OR (update if ANY column is different)
+	whereClause := strings.Join(whereConditions, " OR ")
+
 	// Use CTE with row numbers for deterministic updates
-	sql := fmt.Sprintf(`-- Anonymize table: %s
+	sql := fmt.Sprintf(`-- Anonymize table: %s%s
 WITH numbered_rows AS (
-  SELECT ctid, row_number() OVER (ORDER BY ctid) as _row_num
+  SELECT ctid, row_number() OVER (ORDER BY %s) as _row_num
   FROM %s
 )
 UPDATE %s
 SET %s
 FROM numbered_rows
-WHERE %s.ctid = numbered_rows.ctid;`,
+WHERE %s.ctid = numbered_rows.ctid
+  AND (%s);`,
 		table,
+		orderByComment,
+		orderBy,
 		quoteIdentifier(table),
 		quoteIdentifier(table),
 		strings.Join(setClauses, ",\n    "),
 		quoteIdentifier(table),
+		whereClause,
 	)
 
 	return sql
@@ -129,8 +192,62 @@ func Apply(ctx context.Context, db *gorm.DB, params ApplyParams, logger zerolog.
 		Int("rule_count", len(rules)).
 		Msg("Applying anonymization rules")
 
-	// Generate SQL from rules
-	sql := GenerateSQL(rules)
+	// Extract unique table names from rules
+	tableMap := make(map[string]bool)
+	for _, rule := range rules {
+		tableMap[rule.Table] = true
+	}
+	var tables []string
+	for table := range tableMap {
+		tables = append(tables, table)
+	}
+
+	// Query for primary keys
+	primaryKeys := make(map[string]string)
+	if len(tables) > 0 {
+		pkQuerySQL := generatePrimaryKeyQuerySQL(tables)
+		pkScript := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+DATABASE_NAME="%s"
+PG_VERSION="%s"
+PG_PORT="%d"
+PG_BIN="/usr/lib/postgresql/${PG_VERSION}/bin"
+
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -d "${DATABASE_NAME}" -t -A -F'|' <<'PK_QUERY'
+%s
+PK_QUERY
+`, params.DatabaseName, params.PostgresVersion, params.PostgresPort, pkQuerySQL)
+
+		cmd := exec.CommandContext(ctx, "bash", "-c", pkScript)
+		outputBytes, err := cmd.CombinedOutput()
+		if err != nil {
+			// Log warning but continue - we'll use ctid as fallback
+			logger.Warn().
+				Err(err).
+				Str("output", string(outputBytes)).
+				Msg("Failed to query primary keys, will use ctid for ordering")
+		} else {
+			// Parse output: table_name|column_name (one per line)
+			output := strings.TrimSpace(string(outputBytes))
+			if output != "" {
+				for _, line := range strings.Split(output, "\n") {
+					parts := strings.Split(line, "|")
+					if len(parts) == 2 {
+						tableName := strings.TrimSpace(parts[0])
+						columnName := strings.TrimSpace(parts[1])
+						primaryKeys[tableName] = columnName
+						logger.Debug().
+							Str("table", tableName).
+							Str("pk_column", columnName).
+							Msg("Detected primary key")
+					}
+				}
+			}
+		}
+	}
+
+	// Generate SQL from rules with primary key information
+	sql := GenerateSQL(rules, primaryKeys)
 	if sql == "" {
 		logger.Warn().Msg("Generated empty SQL from rules")
 		return 0, nil

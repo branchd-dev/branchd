@@ -9,21 +9,32 @@ import (
 
 func TestGenerateSQL(t *testing.T) {
 	tests := []struct {
-		name  string
-		rules []models.AnonRule
-		want  string
+		name        string
+		rules       []models.AnonRule
+		primaryKeys map[string]string
+		want        string
 	}{
 		{
-			name:  "empty rules",
-			rules: []models.AnonRule{},
-			want:  "",
+			name:        "empty rules",
+			rules:       []models.AnonRule{},
+			primaryKeys: map[string]string{},
+			want:        "",
 		},
 		{
-			name: "single column anonymization",
+			name: "single column anonymization without PK",
 			rules: []models.AnonRule{
 				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
 			},
-			want: "UPDATE",
+			primaryKeys: map[string]string{},
+			want:        "UPDATE",
+		},
+		{
+			name: "single column anonymization with PK",
+			rules: []models.AnonRule{
+				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
+			},
+			primaryKeys: map[string]string{"users": "id"},
+			want:        "ORDER BY \"id\"",
 		},
 		{
 			name: "multiple columns same table",
@@ -31,21 +42,31 @@ func TestGenerateSQL(t *testing.T) {
 				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
 				{Table: "users", Column: "name", Template: "User ${index}"},
 			},
-			want: "numbered_rows._row_num",
+			primaryKeys: map[string]string{},
+			want:        "numbered_rows._row_num",
 		},
 		{
-			name: "multiple tables",
+			name: "multiple tables with mixed PKs",
 			rules: []models.AnonRule{
 				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
 				{Table: "orders", Column: "reference", Template: "ORD-${index}"},
 			},
-			want: "-- Anonymize table:",
+			primaryKeys: map[string]string{"users": "id"}, // Only users has PK
+			want:        "-- Anonymize table:",
+		},
+		{
+			name: "idempotency - IS DISTINCT FROM clause",
+			rules: []models.AnonRule{
+				{Table: "users", Column: "email", Template: "user_${index}@example.com"},
+			},
+			primaryKeys: map[string]string{},
+			want:        "IS DISTINCT FROM",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GenerateSQL(tt.rules)
+			got := GenerateSQL(tt.rules, tt.primaryKeys)
 			if tt.want != "" && !strings.Contains(got, tt.want) {
 				t.Errorf("GenerateSQL() output doesn't contain expected string\nwant substring: %v\ngot: %v", tt.want, got)
 			}
