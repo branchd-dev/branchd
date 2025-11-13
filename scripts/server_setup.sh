@@ -110,6 +110,13 @@ fi
 PG_INSTALLED_VERSION=$(/usr/lib/postgresql/${PG_VERSION}/bin/psql --version | awk '{print $3}')
 echo "✓ PostgreSQL ${PG_VERSION} verified: ${PG_INSTALLED_VERSION}"
 
+# Disable and stop default PostgreSQL service
+echo "Disabling default PostgreSQL service..."
+sudo systemctl stop postgresql || true
+sudo systemctl disable postgresql || true
+sudo systemctl mask postgresql || true
+echo "✓ PostgreSQL service disabled"
+
 # Configure ZFS kernel module for persistent loading
 echo "Configuring ZFS kernel module..."
 echo "zfs" | sudo tee -a /etc/modules
