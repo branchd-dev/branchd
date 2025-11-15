@@ -110,6 +110,26 @@ fi
 PG_INSTALLED_VERSION=$(/usr/lib/postgresql/${PG_VERSION}/bin/psql --version | awk '{print $3}')
 echo "✓ PostgreSQL ${PG_VERSION} verified: ${PG_INSTALLED_VERSION}"
 
+# Install pgBackRest
+echo "Installing pgBackRest..."
+sudo apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" pgbackrest
+
+echo "Verifying pgBackRest installation..."
+if ! command -v pgbackrest &> /dev/null; then
+    echo "ERROR: pgBackRest was not installed properly!"
+    exit 1
+fi
+PGBACKREST_VERSION=$(pgbackrest version | head -n1)
+echo "✓ pgBackRest verified: ${PGBACKREST_VERSION}"
+
+# Create pgBackRest directories
+echo "Creating pgBackRest directories..."
+sudo mkdir -p /var/log/pgbackrest
+sudo mkdir -p /var/spool/pgbackrest
+sudo chown -R postgres:postgres /var/log/pgbackrest
+sudo chown -R postgres:postgres /var/spool/pgbackrest
+echo "✓ pgBackRest directories created"
+
 # Disable and stop default PostgreSQL service
 echo "Disabling default PostgreSQL service..."
 sudo systemctl stop postgresql || true
@@ -1000,38 +1020,4 @@ echo ""
 echo "=========================================="
 echo "=== Branchd Setup Complete! ==="
 echo "=========================================="
-echo ""
-echo "Summary:"
-echo "  ✓ PostgreSQL ${PG_VERSION} binaries installed"
-echo "  ✓ ZFS pool 'tank' created and mounted at /opt/branchd"
-echo "  ✓ Security: fail2ban, UFW firewall active"
-echo "  ✓ Automatic updates: enabled (Sunday-only reboots at 3 AM)"
-echo "  ✓ Redis: running on localhost:6379"
-echo "  ✓ Systemd services: created and enabled"
-echo "  ✓ Caddy: running (HTTP:80 → HTTPS:443)"
-echo "  ✓ Branchd: $RELEASE_TAG running"
-echo ""
-echo "🎉 Setup complete! Access your Branchd instance at:"
-echo ""
-echo "    https://$(hostname -I | awk '{print $1}')/"
-echo ""
-echo "    (Accept self-signed certificate warning)"
-echo ""
-echo "Next steps:"
-echo "  1. Open the URL above in your browser"
-echo "  2. Complete first-time setup by creating an admin account"
-echo "  3. Configure your source PostgreSQL database"
-echo "  4. Start creating database branches!"
-echo ""
-echo "Architecture:"
-echo "  - Each restore creates its own PostgreSQL cluster with dynamic ports (50000+)"
-echo "  - Restores are stored as ZFS datasets: tank/restore_YYYYMMDDHHMMSS"
-echo "  - Branches are ZFS clones of restore datasets"
-echo ""
-echo "Useful commands:"
-echo "  - View server logs: journalctl -u branchd-server -f"
-echo "  - View worker logs: journalctl -u branchd-worker -f"
-echo "  - Check service status: systemctl status branchd-server branchd-worker"
-echo "  - Check ZFS pool: zpool status tank"
-echo "  - List ZFS datasets: zfs list"
 echo ""

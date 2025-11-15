@@ -131,13 +131,20 @@ func (s *Server) triggerRestore(c *gin.Context) {
 		return
 	}
 
-	// Validate that connection string is set
-	if config.ConnectionString == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection string not configured"})
+	// Validate that a restore source is configured (either connection string or Crunchy Bridge)
+	hasConnectionString := config.ConnectionString != ""
+	hasCrunchyBridge := config.CrunchyBridgeAPIKey != ""
+
+	if !hasConnectionString && !hasCrunchyBridge {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No restore source configured (need either connection string or Crunchy Bridge credentials)"})
 		return
 	}
 
-	s.logger.Info().Str("config_id", config.ID).Msg("Manually triggering restore")
+	s.logger.Info().
+		Str("config_id", config.ID).
+		Bool("has_connection_string", hasConnectionString).
+		Bool("has_crunchy_bridge", hasCrunchyBridge).
+		Msg("Manually triggering restore")
 
 	// Create a new restore record with UTC datetime-based name (e.g., restore_20251017143202)
 	restore := models.Restore{
@@ -153,7 +160,7 @@ func (s *Server) triggerRestore(c *gin.Context) {
 	}
 
 	// Enqueue restore task
-	restoreTask, err := tasks.NewTriggerLogicalRestoreTask(restore.ID)
+	restoreTask, err := tasks.NewTriggerRestoreTask(restore.ID)
 	if err != nil {
 		s.logger.Error().Err(err).Str("restore_id", restore.ID).Msg("Failed to create restore task")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start restore"})

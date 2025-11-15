@@ -36,8 +36,17 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Config form state
+  const [restoreSource, setRestoreSource] = useState<
+    "direct" | "crunchy_bridge"
+  >("direct");
   const [connectionString, setConnectionString] = useState("");
   const [originalConnectionString, setOriginalConnectionString] = useState(""); // Track original redacted value
+  const [crunchyBridgeApiKey, setCrunchyBridgeApiKey] = useState("");
+  const [originalCrunchyBridgeApiKey, setOriginalCrunchyBridgeApiKey] =
+    useState(""); // Track original redacted value
+  const [crunchyBridgeClusterName, setCrunchyBridgeClusterName] = useState("");
+  const [crunchyBridgeDatabaseName, setCrunchyBridgeDatabaseName] =
+    useState("");
   const [postgresVersion, setPostgresVersion] = useState("16");
   const [schemaOnly, setSchemaOnly] = useState<"schema" | "full">("schema");
   const [refreshSchedule, setRefreshSchedule] = useState("");
@@ -67,9 +76,29 @@ export function SettingsPage() {
       }
 
       setConfig(configData);
-      const redactedConnStr = configData.connection_string || "";
-      setConnectionString(redactedConnStr);
-      setOriginalConnectionString(redactedConnStr); // Save original redacted value
+
+      // Determine restore source type
+      const hasCrunchyBridge = !!configData.crunchy_bridge_api_key;
+      const hasConnectionString = !!configData.connection_string;
+
+      if (hasCrunchyBridge) {
+        setRestoreSource("crunchy_bridge");
+        const redactedApiKey = configData.crunchy_bridge_api_key || "";
+        setCrunchyBridgeApiKey(redactedApiKey);
+        setOriginalCrunchyBridgeApiKey(redactedApiKey);
+        setCrunchyBridgeClusterName(
+          configData.crunchy_bridge_cluster_name || "",
+        );
+        setCrunchyBridgeDatabaseName(
+          configData.crunchy_bridge_database_name || "",
+        );
+      } else {
+        setRestoreSource("direct");
+        const redactedConnStr = configData.connection_string || "";
+        setConnectionString(redactedConnStr);
+        setOriginalConnectionString(redactedConnStr);
+      }
+
       setPostgresVersion(configData.postgres_version || "16");
       setSchemaOnly(configData.schema_only ? "schema" : "full");
       setRefreshSchedule(configData.refresh_schedule || "");
@@ -115,21 +144,39 @@ export function SettingsPage() {
         return;
       }
 
-      // Only send connection string if it was actually modified (not the redacted version)
-      const connectionStringChanged =
-        connectionString !== originalConnectionString;
-
-      await api.api.configPartialUpdate({
-        connectionString: connectionStringChanged
-          ? connectionString
-          : undefined,
+      // Determine which fields to send based on restore source
+      let updatePayload: any = {
         postgresVersion: postgresVersion || undefined,
         schemaOnly: schemaOnly === "schema",
         refreshSchedule: refreshSchedule, // Send empty string to clear
         maxRestores: maxRestores,
         domain: domain || undefined,
         letsEncryptEmail: letsEncryptEmail || undefined,
-      });
+      };
+
+      if (restoreSource === "direct") {
+        // Direct connection: send connection string if changed, clear Crunchy Bridge fields
+        const connectionStringChanged =
+          connectionString !== originalConnectionString;
+        updatePayload.connectionString = connectionStringChanged
+          ? connectionString
+          : undefined;
+        updatePayload.crunchyBridgeApiKey = "";
+        updatePayload.crunchyBridgeClusterName = "";
+        updatePayload.crunchyBridgeDatabaseName = "";
+      } else {
+        // Crunchy Bridge: send Crunchy Bridge fields, clear connection string
+        const apiKeyChanged =
+          crunchyBridgeApiKey !== originalCrunchyBridgeApiKey;
+        updatePayload.crunchyBridgeApiKey = apiKeyChanged
+          ? crunchyBridgeApiKey
+          : undefined;
+        updatePayload.crunchyBridgeClusterName = crunchyBridgeClusterName;
+        updatePayload.crunchyBridgeDatabaseName = crunchyBridgeDatabaseName;
+        updatePayload.connectionString = "";
+      }
+
+      await api.api.configPartialUpdate(updatePayload);
 
       // Refresh to get updated config
       await fetchData();
@@ -201,20 +248,75 @@ export function SettingsPage() {
           </Alert>
         )}
 
-        {/* Source Database Section */}
+        {/* Restore Source Section */}
         <Card>
           <CardHeader>
-            <CardTitle>Source Database</CardTitle>
+            <CardTitle>Restore Source</CardTitle>
             <CardDescription>
-              Connection details for your production PostgreSQL database
+              Choose how to restore your PostgreSQL database
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Restore Source Type Selection */}
+            <div className="space-y-3">
+              <Label>Restore Method</Label>
+              <div className="grid gap-3">
+                <label
+                  className={`flex items-start gap-3 p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                    restoreSource === "direct"
+                      ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30"
+                      : "border-gray-200 hover:border-gray-300 dark:border-gray-700"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="restoreSource"
+                    value="direct"
+                    checked={restoreSource === "direct"}
+                    onChange={() => setRestoreSource("direct")}
+                    disabled={saving}
+                    className="mt-1"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium">Direct Connection</div>
+                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                      Connect directly to your PostgreSQL database using a
+                      connection string
+                    </div>
+                  </div>
+                </label>
+
+                <label
+                  className={`flex items-start gap-3 p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                    restoreSource === "crunchy_bridge"
+                      ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30"
+                      : "border-gray-200 hover:border-gray-300 dark:border-gray-700"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="restoreSource"
+                    value="crunchy_bridge"
+                    checked={restoreSource === "crunchy_bridge"}
+                    onChange={() => setRestoreSource("crunchy_bridge")}
+                    disabled={saving}
+                    className="mt-1"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium">Crunchy Bridge</div>
+                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                      Restore from Crunchy Bridge backups using pgBackRest
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
             <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-950/50 dark:border-blue-800">
               <Info className="h-4 w-4 dark:text-blue-400" />
               <AlertDescription className="text-sm dark:text-blue-200">
-                Your connection string is stored in the VM's SQLite and is
-                secured by the EBS volume encryption.
+                Your credentials are stored securely in the VM's SQLite database
+                and protected by EBS volume encryption.
               </AlertDescription>
             </Alert>
 
@@ -222,38 +324,114 @@ export function SettingsPage() {
             {systemInfo?.source_database?.connected && (
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-1 dark:bg-gray-900 dark:border-gray-700">
                 <p className="text-sm dark:text-gray-300">
-                  <span className="font-medium dark:text-gray-200">Detected version:</span>{" "}
+                  <span className="font-medium dark:text-gray-200">
+                    Detected version:
+                  </span>{" "}
                   {systemInfo.source_database.version || "Unknown"}
                 </p>
                 <p className="text-sm dark:text-gray-300">
-                  <span className="font-medium dark:text-gray-200">Detected database size:</span>{" "}
+                  <span className="font-medium dark:text-gray-200">
+                    Detected database size:
+                  </span>{" "}
                   {systemInfo.source_database.size_gb?.toFixed(2) || "0"} GB
                 </p>
               </div>
             )}
 
-            <div className="space-y-2">
-              <Label htmlFor="connectionString">
-                PostgreSQL Connection String
-              </Label>
-              <Input
-                id="connectionString"
-                type="text"
-                placeholder="postgresql://user:password@host:5432/database"
-                value={connectionString}
-                onChange={(e) => setConnectionString(e.target.value)}
-                disabled={saving}
-                className="font-mono text-sm"
-              />
-              <p className="text-xs text-gray-500">
-                {config.connection_string ? (
-                  <>Leave unchanged to keep current connection.</>
-                ) : (
-                  "Example: postgresql://myuser:mypass@db.example.com:5432/mydb"
-                )}
-              </p>
-            </div>
+            {/* Direct Connection Fields */}
+            {restoreSource === "direct" && (
+              <div className="space-y-4 pt-2">
+                <div className="space-y-2">
+                  <Label htmlFor="connectionString">
+                    PostgreSQL Connection String
+                  </Label>
+                  <Input
+                    id="connectionString"
+                    type="text"
+                    placeholder="postgresql://user:password@host:5432/database"
+                    value={connectionString}
+                    onChange={(e) => setConnectionString(e.target.value)}
+                    disabled={saving}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    {config.connection_string ? (
+                      <>Leave unchanged to keep current connection.</>
+                    ) : (
+                      "Example: postgresql://myuser:mypass@db.example.com:5432/mydb"
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
 
+            {/* Crunchy Bridge Fields */}
+            {restoreSource === "crunchy_bridge" && (
+              <div className="space-y-4 pt-2">
+                <div className="space-y-2">
+                  <Label htmlFor="crunchyBridgeApiKey">
+                    Crunchy Bridge API Key
+                  </Label>
+                  <Input
+                    id="crunchyBridgeApiKey"
+                    type="password"
+                    placeholder="Enter your Crunchy Bridge API key"
+                    value={crunchyBridgeApiKey}
+                    onChange={(e) => setCrunchyBridgeApiKey(e.target.value)}
+                    disabled={saving}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    {config.crunchy_bridge_api_key ? (
+                      <>Leave unchanged to keep current API key.</>
+                    ) : (
+                      <>
+                        Find your API key in the Crunchy Bridge dashboard under
+                        Account Settings.
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="crunchyBridgeClusterName">Cluster Name</Label>
+                  <Input
+                    id="crunchyBridgeClusterName"
+                    type="text"
+                    placeholder="my-production-cluster"
+                    value={crunchyBridgeClusterName}
+                    onChange={(e) =>
+                      setCrunchyBridgeClusterName(e.target.value)
+                    }
+                    disabled={saving}
+                  />
+                  <p className="text-xs text-gray-500">
+                    The name of your Crunchy Bridge cluster
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="crunchyBridgeDatabaseName">
+                    Database Name
+                  </Label>
+                  <Input
+                    id="crunchyBridgeDatabaseName"
+                    type="text"
+                    placeholder="postgres"
+                    value={crunchyBridgeDatabaseName}
+                    onChange={(e) =>
+                      setCrunchyBridgeDatabaseName(e.target.value)
+                    }
+                    disabled={saving}
+                  />
+                  <p className="text-xs text-gray-500">
+                    The database name within your cluster
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Common PostgreSQL Version Field */}
             <div className="space-y-2">
               <Label htmlFor="postgresVersion">PostgreSQL Version</Label>
               <Select

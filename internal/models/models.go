@@ -31,10 +31,15 @@ type Config struct {
 	// Authentication configuration
 	JWTSecret string `json:"-" gorm:"type:varchar(64);not null"` // Auto-generated on first setup (64 hex chars)
 
-	// Database source configuration
-	ConnectionString string `json:"connection_string" gorm:"type:text"` // PostgreSQL connection string
+	// Database source configuration (mutually exclusive: use either ConnectionString OR Crunchy Bridge)
+	ConnectionString string `json:"connection_string" gorm:"type:text"` // PostgreSQL connection string for logical restore
 	PostgresVersion  string `json:"postgres_version"`
 	SchemaOnly       bool   `json:"schema_only" gorm:"not null;default:true"` // If true, only restore schema (no data)
+
+	// Crunchy Bridge integration (alternative to ConnectionString)
+	CrunchyBridgeAPIKey      string `json:"crunchy_bridge_api_key" gorm:"type:text"`       // Crunchy Bridge API key
+	CrunchyBridgeClusterName string `json:"crunchy_bridge_cluster_name" gorm:"type:text"`  // Cluster name
+	CrunchyBridgeDatabaseName string `json:"crunchy_bridge_database_name" gorm:"type:text"` // Database name
 
 	// PostgreSQL configuration for branches
 	BranchPostgresqlConf string `json:"branch_postgresql_conf" gorm:"type:text"`

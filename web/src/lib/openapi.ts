@@ -12,6 +12,7 @@
 
 export interface GithubComBranchdDevBranchdInternalModelsAnonRule {
   column?: string;
+  column_type?: string;
   created_at?: string;
   id?: string;
   table?: string;
@@ -82,7 +83,8 @@ export interface InternalServerConfigResponse {
 export interface InternalServerCreateAnonRuleRequest {
   column: string;
   table: string;
-  template: string;
+  template: number[];
+  type?: string;
 }
 
 export interface InternalServerCreateBranchRequest {

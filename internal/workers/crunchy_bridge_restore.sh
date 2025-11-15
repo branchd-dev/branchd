@@ -1,0 +1,219 @@
+#!/bin/bash
+# pgBackRest restore script for Crunchy Bridge backups
+set -euo pipefail
+
+# Configuration from template
+readonly PG_VERSION="{{.PgVersion}}"
+readonly PG_PORT="{{.PgPort}}"
+readonly DATABASE_NAME="{{.DatabaseName}}"
+readonly DATA_DIR="{{.DataDir}}"       # e.g., /opt/branchd/restore_20250915120000/data
+readonly PGBACKREST_CONF="{{.PgBackRestConfPath}}"
+readonly STANZA_NAME="{{.StanzaName}}"
+
+# Paths
+readonly RESTORE_LOG_DIR="/var/log/branchd"
+readonly RESTORE_LOG="${RESTORE_LOG_DIR}/restore-${DATABASE_NAME}.log"
+readonly RESTORE_PID="${RESTORE_LOG_DIR}/restore-${DATABASE_NAME}.pid"
+readonly PG_BIN="/usr/lib/postgresql/${PG_VERSION}/bin"
+readonly RESTORE_DATASET_PATH=$(dirname "${DATA_DIR}")  # /opt/branchd/restore_YYYYMMDDHHMMSS
+readonly ZFS_DATASET="tank/${DATABASE_NAME}"
+readonly SERVICE_NAME="branchd-restore-${DATABASE_NAME}"
+
+# Helper functions
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
+die() {
+    log "ERROR: $1" >&2
+
+    # Stop PostgreSQL service if it was started
+    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        log "Stopping PostgreSQL service..."
+        sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    fi
+
+    # Remove systemd service
+    if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+        log "Removing systemd service..."
+        sudo systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+        sudo rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+        sudo systemctl daemon-reload
+    fi
+
+    # Destroy ZFS dataset if it was created
+    if sudo zfs list "${ZFS_DATASET}" >/dev/null 2>&1; then
+        log "Destroying ZFS dataset..."
+        sudo zfs destroy -r "${ZFS_DATASET}" 2>/dev/null || log "Warning: Could not destroy ZFS dataset"
+    fi
+
+    # Clean up pgBackRest config
+    if [ -f "${PGBACKREST_CONF}" ]; then
+        log "Cleaning up pgBackRest config..."
+        rm -f "${PGBACKREST_CONF}" 2>/dev/null || log "Warning: Could not remove pgBackRest config"
+    fi
+
+    # Write failure marker
+    echo '__BRANCHD_RESTORE_FAILED__' >> "${RESTORE_LOG}"
+    sync
+    sleep 0.5
+
+    # Remove PID file
+    rm -f "${RESTORE_PID}" 2>/dev/null || true
+    exit 1
+}
+
+log "Starting Crunchy Bridge restore: ${DATABASE_NAME}"
+log "PostgreSQL version: ${PG_VERSION}, Port: ${PG_PORT}"
+log "Data directory: ${DATA_DIR}"
+log "Stanza: ${STANZA_NAME}"
+
+# 1. Create ZFS dataset for this restore
+log "Creating ZFS dataset: ${ZFS_DATASET}"
+if sudo zfs list "${ZFS_DATASET}" >/dev/null 2>&1; then
+    log "ZFS dataset already exists, destroying and recreating..."
+    sudo zfs destroy -r "${ZFS_DATASET}" || die "Failed to destroy existing ZFS dataset"
+fi
+
+sudo zfs create "${ZFS_DATASET}" || die "Failed to create ZFS dataset"
+sudo zfs set mountpoint="${RESTORE_DATASET_PATH}" "${ZFS_DATASET}"
+log "ZFS dataset created and mounted at ${RESTORE_DATASET_PATH}"
+
+# 2. Create data directory and set ownership
+log "Creating data directory..."
+sudo mkdir -p "${DATA_DIR}" || die "Failed to create data directory"
+sudo chown -R postgres:postgres "${RESTORE_DATASET_PATH}"
+log "Data directory created with postgres ownership"
+
+# 3. Restore from Crunchy Bridge using pgBackRest
+log "Starting pgBackRest restore from Crunchy Bridge..."
+log "Using pgBackRest config: ${PGBACKREST_CONF}"
+
+# Run pgBackRest restore
+set +e
+sudo -u postgres pgbackrest --config="${PGBACKREST_CONF}" \
+    --stanza="${STANZA_NAME}" \
+    --pg1-path="${DATA_DIR}" \
+    --type=immediate \
+    --target-action=promote \
+    restore 2>&1
+RESTORE_EXIT=$?
+set -e
+
+log "pgBackRest restore completed with exit code: ${RESTORE_EXIT}"
+
+if [ ${RESTORE_EXIT} -ne 0 ]; then
+    die "pgBackRest restore failed with exit code ${RESTORE_EXIT}"
+fi
+
+# 4. Verify PostgreSQL data directory
+log "Verifying PostgreSQL data directory..."
+if [ ! -f "${DATA_DIR}/PG_VERSION" ]; then
+    die "PostgreSQL data directory is invalid (missing PG_VERSION file)"
+fi
+
+PG_DATA_VERSION=$(cat "${DATA_DIR}/PG_VERSION")
+log "Restored PostgreSQL version: ${PG_DATA_VERSION}"
+
+if [ "${PG_DATA_VERSION}" != "${PG_VERSION}" ]; then
+    log "WARNING: Restored version (${PG_DATA_VERSION}) differs from expected version (${PG_VERSION})"
+fi
+
+# 5. Configure PostgreSQL for local access
+log "Configuring PostgreSQL..."
+
+# Copy TLS certificates (shared across all clusters)
+sudo -u postgres cp /etc/postgresql-common/ssl/server.crt "${DATA_DIR}/"
+sudo -u postgres cp /etc/postgresql-common/ssl/server.key "${DATA_DIR}/"
+
+# Update postgresql.conf - append our settings
+sudo -u postgres tee -a "${DATA_DIR}/postgresql.conf" > /dev/null << EOF
+
+# Branchd settings
+port = ${PG_PORT}
+listen_addresses = '127.0.0.1'
+
+# TLS/SSL
+ssl = on
+ssl_cert_file = 'server.crt'
+ssl_key_file = 'server.key'
+EOF
+
+# Configure pg_hba.conf for local access only
+sudo -u postgres tee "${DATA_DIR}/pg_hba.conf" > /dev/null << EOF
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+EOF
+
+log "PostgreSQL configuration complete"
+
+# 6. Create systemd service for this restore cluster
+log "Creating systemd service: ${SERVICE_NAME}"
+sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null << EOF
+[Unit]
+Description=PostgreSQL Restore Cluster from Crunchy Bridge (${DATABASE_NAME})
+After=network.target zfs-mount.service
+Requires=zfs-mount.service
+
+[Service]
+Type=forking
+User=postgres
+Group=postgres
+ExecStart=${PG_BIN}/pg_ctl start -D ${DATA_DIR} -l ${DATA_DIR}/postgresql.log
+ExecStop=${PG_BIN}/pg_ctl stop -D ${DATA_DIR} -m fast
+ExecReload=${PG_BIN}/pg_ctl reload -D ${DATA_DIR}
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutStartSec=300
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+log "Systemd service created"
+
+# 7. Start PostgreSQL cluster
+log "Starting PostgreSQL cluster..."
+sudo systemctl enable "${SERVICE_NAME}"
+sudo systemctl start "${SERVICE_NAME}"
+
+# Wait for PostgreSQL to be ready
+log "Waiting for PostgreSQL to be ready..."
+MAX_RETRIES=60
+RETRY_COUNT=0
+while [ ${RETRY_COUNT} -lt ${MAX_RETRIES} ]; do
+    if sudo -u postgres ${PG_BIN}/pg_isready -p ${PG_PORT} -h 127.0.0.1 >/dev/null 2>&1; then
+        log "PostgreSQL is ready and accepting connections"
+        break
+    fi
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if [ ${RETRY_COUNT} -eq ${MAX_RETRIES} ]; then
+        die "PostgreSQL not ready after ${MAX_RETRIES} attempts"
+    fi
+    log "PostgreSQL not ready, retrying (${RETRY_COUNT}/${MAX_RETRIES})..."
+    sleep 1
+done
+
+# 8. Clean up pgBackRest config (contains credentials)
+log "Cleaning up pgBackRest config..."
+if [ -f "${PGBACKREST_CONF}" ]; then
+    rm -f "${PGBACKREST_CONF}" || log "Warning: Could not remove pgBackRest config"
+    log "pgBackRest config removed"
+fi
+
+log "Crunchy Bridge restore completed successfully"
+log "Restore cluster running on port ${PG_PORT}"
+
+# Write success marker
+echo '__BRANCHD_RESTORE_SUCCESS__' >> "${RESTORE_LOG}"
+sync
+sleep 0.5
+
+# Remove PID file to signal completion
+rm -f "${RESTORE_PID}" || log "Warning: Could not remove PID file"

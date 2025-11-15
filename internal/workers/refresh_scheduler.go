@@ -83,14 +83,14 @@ func checkAndEnqueueRefreshTasks(client *asynq.Client, db *gorm.DB, logger zerol
 		Str("database_name", database.Name).
 		Msg("Created new database record for refresh")
 
-	// Enqueue pg_dump/restore task - it will restore the database
-	task, err := tasks.NewTriggerLogicalRestoreTask(database.ID)
+	// Enqueue restore task
+	task, err := tasks.NewTriggerRestoreTask(database.ID)
 	if err != nil {
 		logger.Error().
 			Err(err).
 			Str("config_id", config.ID).
 			Str("database_id", database.ID).
-			Msg("Failed to create pg_dump restore task")
+			Msg("Failed to create restore task")
 		return
 	}
 
@@ -99,7 +99,7 @@ func checkAndEnqueueRefreshTasks(client *asynq.Client, db *gorm.DB, logger zerol
 			Err(err).
 			Str("config_id", config.ID).
 			Str("database_id", database.ID).
-			Msg("Failed to enqueue pg_dump restore task")
+			Msg("Failed to enqueue restore task")
 		return
 	}
 
