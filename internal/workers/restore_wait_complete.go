@@ -89,9 +89,17 @@ func HandleRestoreWaitComplete(ctx context.Context, t *asynq.Task, client *asynq
 			Msg("Restore completed successfully")
 
 		// Apply anonymization rules before marking as ready
-		// Use the restore's allocated port
+		// Determine the target database name based on restore type:
+		// - Crunchy Bridge: uses the database name from config (pgBackRest restores all databases)
+		// - Logical: uses the source database name from connection string (restored to database with same name as source)
+		targetDatabase := config.DatabaseName // Default for logical restores (extracted from connection string)
+		if config.CrunchyBridgeAPIKey != "" {
+			// Crunchy Bridge restore - use the configured database name
+			targetDatabase = config.CrunchyBridgeDatabaseName
+		}
+
 		_, err := anonymize.Apply(ctx, db, anonymize.ApplyParams{
-			DatabaseName:    restoreModel.Name,
+			DatabaseName:    targetDatabase,
 			PostgresVersion: config.PostgresVersion,
 			PostgresPort:    restoreModel.Port,
 		}, logger)

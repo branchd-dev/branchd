@@ -25,30 +25,36 @@ type OnboardingDatabaseRequest struct {
 
 // ConfigResponse represents the configuration response
 type ConfigResponse struct {
-	ID                   string     `json:"id"`
-	ConnectionString     string     `json:"connection_string"`
-	PostgresVersion      string     `json:"postgres_version"`
-	SchemaOnly           bool       `json:"schema_only"`
-	RefreshSchedule      string     `json:"refresh_schedule"`
-	BranchPostgresqlConf string     `json:"branch_postgresql_conf"`
-	DatabaseName         string     `json:"database_name"`
-	Domain               string     `json:"domain"`
-	LetsEncryptEmail     string     `json:"lets_encrypt_email"`
-	MaxRestores          int        `json:"max_restores"`
-	LastRefreshedAt      *time.Time `json:"last_refreshed_at"`
-	NextRefreshAt        *time.Time `json:"next_refresh_at"`
-	CreatedAt            time.Time  `json:"created_at"`
+	ID                        string     `json:"id"`
+	ConnectionString          string     `json:"connection_string"`
+	PostgresVersion           string     `json:"postgres_version"`
+	SchemaOnly                bool       `json:"schema_only"`
+	RefreshSchedule           string     `json:"refresh_schedule"`
+	BranchPostgresqlConf      string     `json:"branch_postgresql_conf"`
+	DatabaseName              string     `json:"database_name"`
+	Domain                    string     `json:"domain"`
+	LetsEncryptEmail          string     `json:"lets_encrypt_email"`
+	MaxRestores               int        `json:"max_restores"`
+	LastRefreshedAt           *time.Time `json:"last_refreshed_at"`
+	NextRefreshAt             *time.Time `json:"next_refresh_at"`
+	CreatedAt                 time.Time  `json:"created_at"`
+	CrunchyBridgeAPIKey       string     `json:"crunchy_bridge_api_key"`
+	CrunchyBridgeClusterName  string     `json:"crunchy_bridge_cluster_name"`
+	CrunchyBridgeDatabaseName string     `json:"crunchy_bridge_database_name"`
 }
 
 // UpdateConfigRequest represents the request to update configuration
 type UpdateConfigRequest struct {
-	ConnectionString string `json:"connectionString"`
-	PostgresVersion  string `json:"postgresVersion"`
-	SchemaOnly       *bool  `json:"schemaOnly"`
-	RefreshSchedule  string `json:"refreshSchedule"`
-	Domain           string `json:"domain"`
-	LetsEncryptEmail string `json:"letsEncryptEmail"`
-	MaxRestores      *int   `json:"maxRestores"`
+	ConnectionString          string `json:"connectionString"`
+	PostgresVersion           string `json:"postgresVersion"`
+	SchemaOnly                *bool  `json:"schemaOnly"`
+	RefreshSchedule           string `json:"refreshSchedule"`
+	Domain                    string `json:"domain"`
+	LetsEncryptEmail          string `json:"letsEncryptEmail"`
+	MaxRestores               *int   `json:"maxRestores"`
+	CrunchyBridgeAPIKey       string `json:"crunchyBridgeApiKey"`
+	CrunchyBridgeClusterName  string `json:"crunchyBridgeClusterName"`
+	CrunchyBridgeDatabaseName string `json:"crunchyBridgeDatabaseName"`
 }
 
 // @Summary Get configuration
@@ -72,19 +78,22 @@ func (s *Server) getConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, ConfigResponse{
-		ID:                   config.ID,
-		ConnectionString:     redactConnectionString(config.ConnectionString),
-		PostgresVersion:      config.PostgresVersion,
-		SchemaOnly:           config.SchemaOnly,
-		RefreshSchedule:      config.RefreshSchedule,
-		BranchPostgresqlConf: config.BranchPostgresqlConf,
-		DatabaseName:         config.DatabaseName,
-		Domain:               config.Domain,
-		LetsEncryptEmail:     config.LetsEncryptEmail,
-		MaxRestores:          config.MaxRestores,
-		LastRefreshedAt:      config.LastRefreshedAt,
-		NextRefreshAt:        config.NextRefreshAt,
-		CreatedAt:            config.CreatedAt,
+		ID:                        config.ID,
+		ConnectionString:          redactConnectionString(config.ConnectionString),
+		PostgresVersion:           config.PostgresVersion,
+		SchemaOnly:                config.SchemaOnly,
+		RefreshSchedule:           config.RefreshSchedule,
+		BranchPostgresqlConf:      config.BranchPostgresqlConf,
+		DatabaseName:              config.DatabaseName,
+		Domain:                    config.Domain,
+		LetsEncryptEmail:          config.LetsEncryptEmail,
+		MaxRestores:               config.MaxRestores,
+		LastRefreshedAt:           config.LastRefreshedAt,
+		NextRefreshAt:             config.NextRefreshAt,
+		CreatedAt:                 config.CreatedAt,
+		CrunchyBridgeAPIKey:       redactSecret(config.CrunchyBridgeAPIKey),
+		CrunchyBridgeClusterName:  config.CrunchyBridgeClusterName,
+		CrunchyBridgeDatabaseName: config.CrunchyBridgeDatabaseName,
 	})
 }
 
@@ -115,6 +124,29 @@ func (s *Server) updateConfig(c *gin.Context) {
 		s.logger.Error().Err(err).Msg("Failed to get config")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 		return
+	}
+
+	// Update Crunchy Bridge configuration if provided
+	if req.CrunchyBridgeAPIKey != "" {
+		config.CrunchyBridgeAPIKey = req.CrunchyBridgeAPIKey
+	}
+	if req.CrunchyBridgeClusterName != "" {
+		config.CrunchyBridgeClusterName = req.CrunchyBridgeClusterName
+	}
+	if req.CrunchyBridgeDatabaseName != "" {
+		config.CrunchyBridgeDatabaseName = req.CrunchyBridgeDatabaseName
+	}
+
+	// Clear connection string if Crunchy Bridge fields are being set
+	if req.CrunchyBridgeAPIKey != "" && req.ConnectionString == "" {
+		config.ConnectionString = ""
+	}
+
+	// Clear Crunchy Bridge fields if connection string is being set
+	if req.ConnectionString != "" && req.CrunchyBridgeAPIKey == "" {
+		config.CrunchyBridgeAPIKey = ""
+		config.CrunchyBridgeClusterName = ""
+		config.CrunchyBridgeDatabaseName = ""
 	}
 
 	// Update connection string if provided
@@ -238,20 +270,31 @@ func (s *Server) updateConfig(c *gin.Context) {
 	s.logger.Info().Str("config_id", config.ID).Msg("Configuration updated")
 
 	c.JSON(http.StatusOK, ConfigResponse{
-		ID:                   config.ID,
-		ConnectionString:     redactConnectionString(config.ConnectionString),
-		PostgresVersion:      config.PostgresVersion,
-		SchemaOnly:           config.SchemaOnly,
-		RefreshSchedule:      config.RefreshSchedule,
-		BranchPostgresqlConf: config.BranchPostgresqlConf,
-		DatabaseName:         config.DatabaseName,
-		Domain:               config.Domain,
-		LetsEncryptEmail:     config.LetsEncryptEmail,
-		MaxRestores:          config.MaxRestores,
-		LastRefreshedAt:      config.LastRefreshedAt,
-		NextRefreshAt:        config.NextRefreshAt,
-		CreatedAt:            config.CreatedAt,
+		ID:                        config.ID,
+		ConnectionString:          redactConnectionString(config.ConnectionString),
+		PostgresVersion:           config.PostgresVersion,
+		SchemaOnly:                config.SchemaOnly,
+		RefreshSchedule:           config.RefreshSchedule,
+		BranchPostgresqlConf:      config.BranchPostgresqlConf,
+		DatabaseName:              config.DatabaseName,
+		Domain:                    config.Domain,
+		LetsEncryptEmail:          config.LetsEncryptEmail,
+		MaxRestores:               config.MaxRestores,
+		LastRefreshedAt:           config.LastRefreshedAt,
+		NextRefreshAt:             config.NextRefreshAt,
+		CreatedAt:                 config.CreatedAt,
+		CrunchyBridgeAPIKey:       redactSecret(config.CrunchyBridgeAPIKey),
+		CrunchyBridgeClusterName:  config.CrunchyBridgeClusterName,
+		CrunchyBridgeDatabaseName: config.CrunchyBridgeDatabaseName,
 	})
+}
+
+// redactSecret replaces a secret value with *** if it's not empty
+func redactSecret(secret string) string {
+	if secret == "" {
+		return ""
+	}
+	return "***"
 }
 
 // redactConnectionString replaces the password with *** in a PostgreSQL connection string

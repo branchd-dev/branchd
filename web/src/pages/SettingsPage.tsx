@@ -79,7 +79,6 @@ export function SettingsPage() {
 
       // Determine restore source type
       const hasCrunchyBridge = !!configData.crunchy_bridge_api_key;
-      const hasConnectionString = !!configData.connection_string;
 
       if (hasCrunchyBridge) {
         setRestoreSource("crunchy_bridge");

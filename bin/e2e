@@ -7,6 +7,9 @@ set -euo pipefail
 # Hardcoded test database connection string (PostgreSQL 16 superuser)
 # It's a very small database with only a users table with 3 users.
 PG_16_CONN="postgres://postgres:hCazJJexWqQCzRghehroazRkj5nDbGMpW9JjjtoL5lBFPGi6auHbQ8jZHUZYEluO@p.mgdruzjwa5hk7elhmlnug4somq.db.postgresbridge.com:5432/quic_test"
+CRUNCHYBRIDGE_API_KEY="cbkey_16we5jO0whSk843bLuVa7jdni90TaB2lmdVw091SYUkZrn"
+CRUNCHYBRIDGE_CLUSTER_NAME="quic-e2e"
+CRUNCHYBRIDGE_DATABASE_NAME="quic_test"
 
 # Default PostgreSQL version
 PG_VERSION="${TEST_POSTGRES_VERSION:-16}"
@@ -14,11 +17,17 @@ PG_VERSION="${TEST_POSTGRES_VERSION:-16}"
 # Use hardcoded connection string if not set in environment
 export TEST_CONNECTION_STRING="${TEST_CONNECTION_STRING:-$PG_16_CONN}"
 
+# Export Crunchy Bridge credentials for e2e tests
+export CRUNCHYBRIDGE_API_KEY="${CRUNCHYBRIDGE_API_KEY}"
+export CRUNCHYBRIDGE_CLUSTER_NAME="${CRUNCHYBRIDGE_CLUSTER_NAME}"
+export CRUNCHYBRIDGE_DATABASE_NAME="${CRUNCHYBRIDGE_DATABASE_NAME}"
+
 echo "========================================="
 echo "Branchd E2E Test Runner"
 echo "========================================="
 echo "PostgreSQL version: ${PG_VERSION}"
 echo "Connection: ${TEST_CONNECTION_STRING%%@*}@***"
+echo "Crunchy Bridge cluster: ${CRUNCHYBRIDGE_CLUSTER_NAME}"
 echo ""
 
 # Check for Terraform variables
@@ -49,13 +58,6 @@ terraform init -upgrade >/dev/null
 terraform apply -auto-approve \
     -var "postgres_version=${PG_VERSION}"
 
-# Get VM details
-PUBLIC_IP=$(terraform output -raw public_ip)
-API_URL=$(terraform output -raw api_url)
-echo "VM provisioned: ${PUBLIC_IP}"
-echo "API URL: ${API_URL}"
-echo "Infrastructure setup complete (PostgreSQL, ZFS, Redis, Caddy)"
-
 cd ../..
 
 echo ""
@@ -66,14 +68,14 @@ export TEST_POSTGRES_VERSION="${PG_VERSION}"
 
 # Run tests with verbose output
 # BuildAndDeploy is called by the test itself
-go test ./tests/e2e -v -timeout 10m
+# Running only Crunchy Bridge test
+go test ./tests/e2e -v -timeout 5m -run TestCrunchyBridgeIntegration
 
 echo ""
 echo "========================================="
 echo "Tests completed successfully!"
 echo "========================================="
 echo ""
-echo "VM is still running at: ${PUBLIC_IP}"
 echo "To destroy the VM:"
 echo "  cd tests/terraform && terraform destroy -auto-approve"
 echo ""

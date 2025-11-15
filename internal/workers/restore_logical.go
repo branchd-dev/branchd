@@ -21,14 +21,15 @@ import (
 var logicalRestoreScript string
 
 type logicalRestoreParams struct {
-	ConnectionString string
-	PgVersion        string
-	PgPort           int // Dynamic port for this restore's cluster
-	DatabaseName     string
-	SchemaOnly       string // "true" or "false" for template
-	ParallelJobs     int
-	DumpDir          string // Directory for pg_dump output (on EBS zpool)
-	DataDir          string // PostgreSQL data directory for initdb
+	ConnectionString   string
+	PgVersion          string
+	PgPort             int    // Dynamic port for this restore's cluster
+	RestoreName        string // Name of the restore (e.g., restore_20251115173353)
+	SourceDatabaseName string // Source database name from connection string (e.g., quic_test)
+	SchemaOnly         string // "true" or "false" for template
+	ParallelJobs       int
+	DumpDir            string // Directory for pg_dump output (on EBS zpool)
+	DataDir            string // PostgreSQL data directory for initdb
 
 	// PostgreSQL tuning parameters
 	TuneSQL  []string // SQL statements to apply tuning
@@ -101,16 +102,17 @@ func (p *LogicalRestoreProvider) StartRestore(ctx context.Context, params Restor
 	}
 
 	scriptParams := logicalRestoreParams{
-		ConnectionString: params.Config.ConnectionString,
-		PgVersion:        params.Config.PostgresVersion,
-		PgPort:           params.Port,
-		DatabaseName:     params.Restore.Name,
-		SchemaOnly:       schemaOnlyStr,
-		ParallelJobs:     tuning.ParallelJobs,
-		DumpDir:          dumpDir,
-		DataDir:          dataDir,
-		TuneSQL:          tuning.GenerateAlterSystemSQL(),
-		ResetSQL:         pgtuning.GenerateResetSQL(),
+		ConnectionString:   params.Config.ConnectionString,
+		PgVersion:          params.Config.PostgresVersion,
+		PgPort:             params.Port,
+		RestoreName:        params.Restore.Name,
+		SourceDatabaseName: params.Config.DatabaseName, // Extracted from connection string
+		SchemaOnly:         schemaOnlyStr,
+		ParallelJobs:       tuning.ParallelJobs,
+		DumpDir:            dumpDir,
+		DataDir:            dataDir,
+		TuneSQL:            tuning.GenerateAlterSystemSQL(),
+		ResetSQL:           pgtuning.GenerateResetSQL(),
 	}
 
 	script, err := p.renderScript(scriptParams)

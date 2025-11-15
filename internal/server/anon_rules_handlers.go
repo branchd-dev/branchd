@@ -14,7 +14,7 @@ import (
 type CreateAnonRuleRequest struct {
 	Table    string          `json:"table" binding:"required"`
 	Column   string          `json:"column" binding:"required"`
-	Template json.RawMessage `json:"template" binding:"required"`
+	Template json.RawMessage `json:"template" binding:"required" swaggertype:"string" example:"\"user_${index}@example.com\""`
 	Type     string          `json:"type"` // Optional: "text", "integer", "boolean", "null" - overrides auto-detection
 }
 

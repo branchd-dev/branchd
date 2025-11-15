@@ -282,12 +282,9 @@ echo "Cleaning up PostgreSQL files..."
 sudo -u postgres rm -f "${BRANCH_PGDATA}/postmaster.pid"
 sudo -u postgres rm -f "${BRANCH_PGDATA}/postgresql.auto.conf"
 
-# Copy config files from system location to data directory
-# Ubuntu's pg_createcluster stores configs in /etc/postgresql/, but branches need them in the data dir
-echo "Copying PostgreSQL config files to data directory..."
-sudo -u postgres cp "/etc/postgresql/${PG_VERSION}/main/postgresql.conf" "${BRANCH_PGDATA}/postgresql.conf"
-sudo -u postgres cp "/etc/postgresql/${PG_VERSION}/main/pg_hba.conf" "${BRANCH_PGDATA}/pg_hba.conf.bak"
-sudo -u postgres cp "/etc/postgresql/${PG_VERSION}/main/pg_ident.conf" "${BRANCH_PGDATA}/pg_ident.conf"
+# Config files already exist in the ZFS clone from the source restore
+# No need to copy - they were cloned from the restore's data directory
+echo "Using PostgreSQL config files from cloned restore..."
 
 # Minimal update to postgresql.conf for the new port.
 # Note: SSL configuration is inherited from the main cluster via ZFS clone

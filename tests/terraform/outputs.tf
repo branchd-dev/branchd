@@ -25,7 +25,7 @@ output "postgres_version" {
 
 output "ssh_command" {
   description = "SSH command to connect to instance"
-  value       = "ssh -i ${var.ssh_private_key_path} ubuntu@${aws_instance.branchd_test.public_ip}"
+  value       = "ssh ubuntu@${aws_instance.branchd_test.public_ip}"
 }
 
 output "api_url" {

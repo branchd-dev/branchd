@@ -125,19 +125,83 @@ log "Configuring PostgreSQL..."
 # Copy TLS certificates (shared across all clusters)
 sudo -u postgres cp /etc/postgresql-common/ssl/server.crt "${DATA_DIR}/"
 sudo -u postgres cp /etc/postgresql-common/ssl/server.key "${DATA_DIR}/"
+# Fix permissions on server.key (PostgreSQL requires 0600)
+sudo -u postgres chmod 0600 "${DATA_DIR}/server.key"
+sudo -u postgres chmod 0644 "${DATA_DIR}/server.crt"
 
-# Update postgresql.conf - append our settings
-sudo -u postgres tee -a "${DATA_DIR}/postgresql.conf" > /dev/null << EOF
-
-# Branchd settings
-port = ${PG_PORT}
+# Replace postgresql.conf with a clean config optimized for ephemeral dev branches
+# This removes all Crunchy Bridge specific settings and production-oriented configs
+log "Creating clean postgresql.conf for dev branch..."
+sudo -u postgres tee "${DATA_DIR}/postgresql.conf" > /dev/null << 'EOF'
+# Connection Settings
 listen_addresses = '127.0.0.1'
+port = ${PG_PORT}
+max_connections = 1000
 
 # TLS/SSL
 ssl = on
 ssl_cert_file = 'server.crt'
 ssl_key_file = 'server.key'
+ssl_min_protocol_version = 'TLSv1.2'
+
+# Authentication
+password_encryption = scram-sha-256
+
+# Resource Limits
+# Note: These parameters are set high to support pgBackRest recovery from production backups.
+# PostgreSQL requires these values to be >= the source database during WAL replay.
+shared_buffers = 128MB
+work_mem = 8MB
+maintenance_work_mem = 64MB
+effective_cache_size = 512MB
+max_worker_processes = 200
+max_parallel_workers_per_gather = 2
+max_parallel_workers = 4
+max_prepared_transactions = 100
+max_locks_per_transaction = 256
+max_pred_locks_per_transaction = 256
+
+# WAL Settings
+wal_level = logical
+max_wal_senders = 20
+max_replication_slots = 0
+max_wal_size = 512MB
+min_wal_size = 80MB
+
+# Extensions
+shared_preload_libraries = 'pg_stat_statements'
+
+# Logging
+logging_collector = on
+log_destination = 'stderr'
+log_directory = 'log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_rotation_age = 1d
+log_rotation_size = 100MB
+log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+log_timezone = 'UTC'
+
+# Performance
+random_page_cost = 1.1
+effective_io_concurrency = 200
+
+# Statistics
+track_io_timing = on
+track_functions = pl
+
+# Locale
+datestyle = 'iso, mdy'
+timezone = 'UTC'
+lc_messages = 'en_US.UTF-8'
+lc_monetary = 'en_US.UTF-8'
+lc_numeric = 'en_US.UTF-8'
+lc_time = 'en_US.UTF-8'
+default_text_search_config = 'pg_catalog.english'
 EOF
+
+# Substitute the port variable
+sudo -u postgres sed -i "s/\${PG_PORT}/${PG_PORT}/g" "${DATA_DIR}/postgresql.conf"
+log "postgresql.conf created"
 
 # Configure pg_hba.conf for local access only
 sudo -u postgres tee "${DATA_DIR}/pg_hba.conf" > /dev/null << EOF
@@ -180,8 +244,8 @@ log "Systemd service created"
 
 # 7. Start PostgreSQL cluster
 log "Starting PostgreSQL cluster..."
-sudo systemctl enable "${SERVICE_NAME}"
-sudo systemctl start "${SERVICE_NAME}"
+sudo systemctl enable "${SERVICE_NAME}" || die "Failed to enable systemd service"
+sudo systemctl start "${SERVICE_NAME}" || die "Failed to start systemd service"
 
 # Wait for PostgreSQL to be ready
 log "Waiting for PostgreSQL to be ready..."

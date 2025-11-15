@@ -111,14 +111,16 @@ func (p *CrunchyBridgeProvider) StartRestore(ctx context.Context, params Restore
 
 	// Calculate paths
 	dataDir := fmt.Sprintf("%s/data", params.RestoreDataPath)
-	pgbackrestConfPath := fmt.Sprintf("%s/pgbackrest.conf", params.RestoreDataPath)
+	// Write pgBackRest config to /tmp because ZFS mount will overwrite the restore directory
+	pgbackrestConfPath := fmt.Sprintf("/tmp/pgbackrest_%s.conf", params.Restore.Name)
 
 	// Generate pgBackRest configuration
 	pgbackrestConf := backupToken.GeneratePgBackRestConfig(backupToken.Stanza, dataDir)
 
-	// Write pgBackRest config to file
+	// Write pgBackRest config to /tmp (will be cleaned up by restore script)
 	// Note: This contains credentials, so we secure it and clean it up after restore
-	if err := os.WriteFile(pgbackrestConfPath, []byte(pgbackrestConf), 0600); err != nil {
+	// Use 0644 so postgres user can read it for pgBackRest restore
+	if err := os.WriteFile(pgbackrestConfPath, []byte(pgbackrestConf), 0644); err != nil {
 		return fmt.Errorf("failed to write pgBackRest config: %w", err)
 	}
 

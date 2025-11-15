@@ -102,6 +102,9 @@ log "Configuring PostgreSQL..."
 # Copy TLS certificates (shared across all clusters)
 sudo -u postgres cp /etc/postgresql-common/ssl/server.crt "${DATA_DIR}/"
 sudo -u postgres cp /etc/postgresql-common/ssl/server.key "${DATA_DIR}/"
+# Fix permissions on server.key (PostgreSQL requires 0600)
+sudo -u postgres chmod 0600 "${DATA_DIR}/server.key"
+sudo -u postgres chmod 0644 "${DATA_DIR}/server.crt"
 
 # Update postgresql.conf
 sudo -u postgres tee "${DATA_DIR}/postgresql.conf" > /dev/null << EOF
@@ -208,9 +211,9 @@ done
 # 7. Apply performance optimizations for restore
 log "Applying performance optimizations (parallel_jobs=${PARALLEL_JOBS})..."
 {{range .TuneSQL}}
-sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -h 127.0.0.1 -c "{{.}}" 2>&1 || log "Warning: Could not apply tuning parameter"
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -c "{{.}}" 2>&1 || log "Warning: Could not apply tuning parameter"
 {{end}}
-sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -h 127.0.0.1 -c "SELECT pg_reload_conf()" 2>&1 || log "Warning: Could not reload config"
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -c "SELECT pg_reload_conf()" 2>&1 || log "Warning: Could not reload config"
 
 # 8. Start pg_dump from source database
 log "Starting pg_dump [schema_only=${SCHEMA_ONLY}]..."
@@ -241,13 +244,17 @@ if [ ${PGDUMP_EXIT} -ne 0 ]; then
     die "pg_dump failed with exit code ${PGDUMP_EXIT}"
 fi
 
-# 9. Three-Phase Restore
+# 9. Create target database (same name as source)
+log "Creating target database: {{.SourceDatabaseName}}"
+sudo -u postgres ${PG_BIN}/createdb -p ${PG_PORT} "{{.SourceDatabaseName}}" || log "Database may already exist"
+
+# 10. Three-Phase Restore
 
 # Phase 1: Schema
 log "Phase 1/3: Restoring schema..."
 SCHEMA_FLAGS="--format=custom --section=pre-data --no-owner --no-acl --verbose"
 set +e
-sudo -u postgres ${PG_BIN}/pg_restore ${SCHEMA_FLAGS} --dbname="postgres" --port=${PG_PORT} --host=127.0.0.1 "${DUMP_FILE}" 2>&1
+sudo -u postgres ${PG_BIN}/pg_restore ${SCHEMA_FLAGS} --dbname="{{.SourceDatabaseName}}" --port=${PG_PORT} "${DUMP_FILE}" 2>&1
 SCHEMA_EXIT=$?
 set -e
 
@@ -261,7 +268,7 @@ fi
 log "Phase 2/3: Loading data (parallel, jobs=${PARALLEL_JOBS})..."
 DATA_FLAGS="--format=custom --section=data --jobs=${PARALLEL_JOBS} --no-owner --no-acl --verbose"
 set +e
-sudo -u postgres ${PG_BIN}/pg_restore ${DATA_FLAGS} --dbname="postgres" --port=${PG_PORT} --host=127.0.0.1 "${DUMP_FILE}" 2>&1
+sudo -u postgres ${PG_BIN}/pg_restore ${DATA_FLAGS} --dbname="{{.SourceDatabaseName}}" --port=${PG_PORT} "${DUMP_FILE}" 2>&1
 DATA_EXIT=$?
 set -e
 
@@ -275,7 +282,7 @@ fi
 log "Phase 3/3: Building indexes and constraints (parallel, jobs=${PARALLEL_JOBS})..."
 POSTDATA_FLAGS="--format=custom --section=post-data --jobs=${PARALLEL_JOBS} --no-owner --no-acl --verbose"
 set +e
-sudo -u postgres ${PG_BIN}/pg_restore ${POSTDATA_FLAGS} --dbname="postgres" --port=${PG_PORT} --host=127.0.0.1 "${DUMP_FILE}" 2>&1
+sudo -u postgres ${PG_BIN}/pg_restore ${POSTDATA_FLAGS} --dbname="{{.SourceDatabaseName}}" --port=${PG_PORT} "${DUMP_FILE}" 2>&1
 POSTDATA_EXIT=$?
 set -e
 
@@ -300,9 +307,9 @@ fi
 # 11. Reset performance optimizations
 log "Resetting performance optimizations..."
 {{range .ResetSQL}}
-sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -h 127.0.0.1 -c "{{.}}" 2>&1 || log "Warning: Could not reset parameter"
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -c "{{.}}" 2>&1 || log "Warning: Could not reset parameter"
 {{end}}
-sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -h 127.0.0.1 -c "SELECT pg_reload_conf()" 2>&1 || log "Warning: Could not reload config"
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -c "SELECT pg_reload_conf()" 2>&1 || log "Warning: Could not reload config"
 
 log "PostgreSQL restore completed successfully [schema_only=${SCHEMA_ONLY}]"
 log "Restore cluster running on port ${PG_PORT}"

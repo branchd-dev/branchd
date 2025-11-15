@@ -68,6 +68,9 @@ export interface InternalServerConfigResponse {
   branch_postgresql_conf?: string;
   connection_string?: string;
   created_at?: string;
+  crunchy_bridge_api_key?: string;
+  crunchy_bridge_cluster_name?: string;
+  crunchy_bridge_database_name?: string;
   database_name?: string;
   domain?: string;
   id?: string;
@@ -83,7 +86,7 @@ export interface InternalServerConfigResponse {
 export interface InternalServerCreateAnonRuleRequest {
   column: string;
   table: string;
-  template: number[];
+  template: string;
   type?: string;
 }
 
@@ -154,6 +157,9 @@ export interface InternalServerUpdateAnonRulesRequest {
 
 export interface InternalServerUpdateConfigRequest {
   connectionString?: string;
+  crunchyBridgeApiKey?: string;
+  crunchyBridgeClusterName?: string;
+  crunchyBridgeDatabaseName?: string;
   domain?: string;
   letsEncryptEmail?: string;
   maxRestores?: number;
