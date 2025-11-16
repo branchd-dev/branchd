@@ -129,6 +129,12 @@ func (s *Server) updateConfig(c *gin.Context) {
 	// Update Crunchy Bridge configuration if provided
 	if req.CrunchyBridgeAPIKey != "" {
 		config.CrunchyBridgeAPIKey = req.CrunchyBridgeAPIKey
+
+		// Automatically disable schema-only when switching to Crunchy Bridge
+		if config.SchemaOnly {
+			s.logger.Info().Msg("Automatically disabling schema_only for Crunchy Bridge (not supported by pgBackRest)")
+			config.SchemaOnly = false
+		}
 	}
 	if req.CrunchyBridgeClusterName != "" {
 		config.CrunchyBridgeClusterName = req.CrunchyBridgeClusterName
@@ -212,6 +218,13 @@ func (s *Server) updateConfig(c *gin.Context) {
 
 	// Update schema-only flag if provided
 	if req.SchemaOnly != nil {
+		// Validate: schema-only is not supported for Crunchy Bridge restores
+		if *req.SchemaOnly && config.CrunchyBridgeAPIKey != "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "schema_only is not supported for Crunchy Bridge restores (pgBackRest always restores full database)",
+			})
+			return
+		}
 		config.SchemaOnly = *req.SchemaOnly
 	}
 

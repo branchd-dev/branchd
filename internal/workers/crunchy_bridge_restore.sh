@@ -169,7 +169,8 @@ max_wal_size = 512MB
 min_wal_size = 80MB
 
 # Extensions
-shared_preload_libraries = 'pg_stat_statements'
+# Note: pgaudit is included because Crunchy Bridge databases have it installed
+shared_preload_libraries = 'pg_stat_statements,pgaudit'
 
 # Logging
 logging_collector = on

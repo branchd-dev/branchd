@@ -101,14 +101,22 @@ func (s *Server) createBranch(c *gin.Context) {
 		}
 	}
 
-	// Return connection details with correct restore name from the Restore record
+	// Determine the actual database name inside the PostgreSQL cluster
+	// - For Crunchy Bridge restores: use the configured database name
+	// - For logical restores: extract from connection string
+	databaseName := config.DatabaseName
+	if config.CrunchyBridgeDatabaseName != "" {
+		databaseName = config.CrunchyBridgeDatabaseName
+	}
+
+	// Return connection details with correct database name
 	response := CreateBranchResponse{
 		ID:       branch.ID,
 		User:     branch.User,
 		Password: branch.Password,
 		Host:     host,
 		Port:     branch.Port,
-		Database: restore.Name, // Use restore name from Restore record, not config
+		Database: databaseName,
 	}
 
 	c.JSON(http.StatusCreated, response)
@@ -195,6 +203,14 @@ func (s *Server) listBranches(c *gin.Context) {
 		}
 	}
 
+	// Determine the actual database name inside the PostgreSQL cluster
+	// - For Crunchy Bridge restores: use the configured database name
+	// - For logical restores: extract from connection string
+	databaseName := config.DatabaseName
+	if config.CrunchyBridgeDatabaseName != "" {
+		databaseName = config.CrunchyBridgeDatabaseName
+	}
+
 	response := make([]BranchListResponse, 0, len(branches))
 	for _, branch := range branches {
 		// Determine created by
@@ -203,13 +219,13 @@ func (s *Server) listBranches(c *gin.Context) {
 			createdBy = branch.CreatedBy.Email
 		}
 
-		// Build connection URL using the restore name and determined host
+		// Build connection URL using the actual database name
 		connectionURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s",
 			branch.User,
 			branch.Password,
 			host,
 			branch.Port,
-			branch.Restore.Name,
+			databaseName,
 		)
 
 		response = append(response, BranchListResponse{

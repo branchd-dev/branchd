@@ -62,10 +62,17 @@ func checkAndEnqueueRefreshTasks(client *asynq.Client, db *gorm.DB, logger zerol
 		}()).
 		Msg("Config refresh due - creating new database and enqueueing restore task")
 
+	// Determine schema-only flag
+	// Note: Crunchy Bridge (pgBackRest) doesn't support schema-only, only logical restore (pg_dump) does
+	schemaOnly := config.SchemaOnly
+	if config.CrunchyBridgeAPIKey != "" {
+		schemaOnly = false
+	}
+
 	// Create a new database record for the refresh
 	database := models.Restore{
 		Name:       models.GenerateRestoreName(),
-		SchemaOnly: config.SchemaOnly,
+		SchemaOnly: schemaOnly,
 		Port:       5432, // Main PostgreSQL cluster port
 	}
 

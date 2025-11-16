@@ -89,7 +89,7 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 		require.Equal(t, crunchyBridgeClusterName, config["crunchy_bridge_cluster_name"])
 		require.Equal(t, crunchyBridgeDatabaseName, config["crunchy_bridge_database_name"])
 		require.NotEmpty(t, config["crunchy_bridge_api_key"], "API key should be set (redacted)")
-		require.Equal(t, true, config["schema_only"], "Config should default to schema_only=true")
+		require.Equal(t, false, config["schema_only"], "Crunchy Bridge restores don't support schema_only (pgBackRest limitation)")
 
 		t.Log("Crunchy Bridge configured successfully")
 	})
@@ -112,21 +112,22 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 	})
 
 	// ===================================================================
-	// Test 2: Trigger Schema-Only Restore from Crunchy Bridge
+	// Test 2: Trigger Restore from Crunchy Bridge
+	// Note: Crunchy Bridge uses pgBackRest which always does full restores (schema + data)
 	// ===================================================================
-	var schemaOnlyRestoreID string
+	var firstRestoreID string
 
-	t.Run("TriggerSchemaOnlyRestore", func(t *testing.T) {
-		t.Log("Triggering schema-only restore from Crunchy Bridge...")
+	t.Run("TriggerRestore", func(t *testing.T) {
+		t.Log("Triggering restore from Crunchy Bridge...")
 
-		// Trigger restore explicitly (config is already set with schema_only=true)
+		// Trigger restore explicitly
 		vm.APICall(t, "POST", "/api/restores/trigger-restore", nil)
 
-		t.Log("Schema-only restore triggered (via pgBackRest)")
+		t.Log("Restore triggered (via pgBackRest)")
 	})
 
-	t.Run("WaitForSchemaOnlyRestore", func(t *testing.T) {
-		t.Log("Waiting for schema-only restore to complete...")
+	t.Run("WaitForRestore", func(t *testing.T) {
+		t.Log("Waiting for restore to complete...")
 
 		// Poll until restore is ready (pgBackRest restore may take longer than pg_dump)
 		vm.WaitForCondition(t, 120*time.Second, func() bool {
@@ -140,128 +141,38 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 			return ok && schemaReady
 		})
 
-		t.Log("Schema-only restore completed via pgBackRest")
+		t.Log("Restore completed via pgBackRest")
 
 		// Verify restore state
 		restores := vm.APICallList(t, "GET", "/api/restores", nil)
 		require.Len(t, restores, 1, "Should have exactly 1 restore")
 
 		restore := restores[0]
-		schemaOnlyRestoreID = restore["id"].(string)
+		firstRestoreID = restore["id"].(string)
 		require.True(t, restore["schema_ready"].(bool), "Restore schema should be ready")
-		require.True(t, restore["schema_only"].(bool), "First restore should be schema-only")
+		require.False(t, restore["schema_only"].(bool), "Crunchy Bridge restores are always full (pgBackRest limitation)")
 
 		t.Log("Verified restore was created from Crunchy Bridge backup")
 	})
 
 	// ===================================================================
-	// Test 3: Schema-Only Branch from Crunchy Bridge Restore
+	// Test 3: Branch from Crunchy Bridge Restore
 	// ===================================================================
-	t.Run("TestSchemaOnlyBranch", func(t *testing.T) {
-		t.Log("Testing schema-only branch from Crunchy Bridge restore...")
+	t.Run("TestBranch", func(t *testing.T) {
+		t.Log("Testing branch from Crunchy Bridge restore...")
 
-		branchName := fmt.Sprintf("cb-schema-branch-%d", timestamp)
-		branchID := vm.TestBranchOperations(t, ctx, branchName, true, true)
+		branchName := fmt.Sprintf("cb-branch-%d", timestamp)
+		// Note: schemaOnly=false because Crunchy Bridge restores always have data
+		branchID := vm.TestBranchOperations(t, ctx, branchName, false, true)
 		require.NotEmpty(t, branchID, "Branch ID should not be empty")
 
-		t.Log("Schema-only branch test completed")
+		t.Log("Branch test completed")
 	})
 
 	// ===================================================================
-	// Test 4: Update Config to Trigger Full Restore
+	// Test 4: Refresh Flow (Tests Crunchy Bridge re-restore)
 	// ===================================================================
-	var fullRestoreID string
-
-	t.Run("UpdateConfigForFullRestore", func(t *testing.T) {
-		t.Log("Updating config to disable schema-only mode...")
-
-		// Update config to disable schema-only (will trigger full restore on next activation)
-		vm.APICall(t, "PATCH", "/api/config", map[string]interface{}{
-			"schemaOnly": false,
-		})
-
-		// Verify config was updated
-		config := vm.APICall(t, "GET", "/api/config", nil)
-		require.False(t, config["schema_only"].(bool), "schema_only should be false")
-
-		t.Log("Config updated to full restore mode")
-	})
-
-	t.Run("TriggerFullRestore", func(t *testing.T) {
-		t.Log("Triggering full restore from Crunchy Bridge...")
-
-		// Trigger restore explicitly (config was updated to schema_only=false)
-		vm.APICall(t, "POST", "/api/restores/trigger-restore", nil)
-
-		t.Log("Full restore triggered (via pgBackRest with data)")
-	})
-
-	t.Run("WaitForFullRestore", func(t *testing.T) {
-		t.Log("Waiting for full restore to complete...")
-
-		// Wait until we have 2 restores (schema-only + full)
-		// Note: pgBackRest full restore may take longer than pg_dump
-		vm.WaitForCondition(t, 180*time.Second, func() bool {
-			restores := vm.APICallList(t, "GET", "/api/restores", nil)
-			if len(restores) < 2 {
-				return false
-			}
-
-			// Find the full restore (schema_only=false)
-			for _, restore := range restores {
-				if !restore["schema_only"].(bool) {
-					schemaReady, ok1 := restore["schema_ready"].(bool)
-					dataReady, ok2 := restore["data_ready"].(bool)
-					if ok1 && ok2 && schemaReady && dataReady {
-						fullRestoreID = restore["id"].(string)
-						return true
-					}
-				}
-			}
-			return false
-		})
-
-		t.Log("Full restore completed via pgBackRest")
-
-		// Verify restore state
-		restores := vm.APICallList(t, "GET", "/api/restores", nil)
-		require.GreaterOrEqual(t, len(restores), 1, "Should have at least 1 restore")
-
-		// Find full restore
-		var fullRestore map[string]interface{}
-		for _, restore := range restores {
-			if !restore["schema_only"].(bool) {
-				fullRestore = restore
-				break
-			}
-		}
-		require.NotNil(t, fullRestore, "Should find full restore")
-		require.True(t, fullRestore["schema_ready"].(bool), "Full restore schema should be ready")
-		require.True(t, fullRestore["data_ready"].(bool), "Full restore data should be ready")
-
-		t.Log("Verified full restore from Crunchy Bridge backup")
-	})
-
-	// ===================================================================
-	// Test 5: Full Database Branch (With Anonymized Data)
-	// ===================================================================
-	var fullBranchID string
-
-	t.Run("TestFullDatabaseBranch", func(t *testing.T) {
-		t.Log("Testing full database branch with anonymization...")
-
-		// Keep the branch (deleteBranch=false) to verify it's preserved after cleanup
-		branchName := fmt.Sprintf("cb-full-branch-%d", timestamp)
-		fullBranchID = vm.TestBranchOperations(t, ctx, branchName, false, false)
-		require.NotEmpty(t, fullBranchID, "Branch ID should not be empty")
-
-		t.Log("Full database branch test completed with anonymization verified")
-	})
-
-	// ===================================================================
-	// Test 6: Refresh Flow (Tests Crunchy Bridge re-restore)
-	// ===================================================================
-	var refreshedRestoreID string
+	var secondRestoreID string
 
 	t.Run("RefreshRestores", func(t *testing.T) {
 		t.Log("Testing refresh flow with Crunchy Bridge...")
@@ -278,13 +189,13 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 		vm.WaitForCondition(t, 180*time.Second, func() bool {
 			restores := vm.APICallList(t, "GET", "/api/restores", nil)
 
-			// Look for newest restore (by created_at or just find one that's ready and different)
+			// Look for newest restore (find one that's ready and different from first restore)
 			for _, restore := range restores {
-				if restore["id"].(string) != fullRestoreID && restore["id"].(string) != schemaOnlyRestoreID {
+				if restore["id"].(string) != firstRestoreID {
 					schemaReady, ok1 := restore["schema_ready"].(bool)
 					dataReady, ok2 := restore["data_ready"].(bool)
 					if ok1 && ok2 && schemaReady && dataReady {
-						refreshedRestoreID = restore["id"].(string)
+						secondRestoreID = restore["id"].(string)
 						return true
 					}
 				}
@@ -292,26 +203,26 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 			return false
 		})
 
-		require.NotEmpty(t, refreshedRestoreID, "Refreshed restore should be created")
-		t.Logf("Refresh completed via Crunchy Bridge, new restore ID: %s", refreshedRestoreID)
+		require.NotEmpty(t, secondRestoreID, "Refreshed restore should be created")
+		t.Logf("Refresh completed via Crunchy Bridge, new restore ID: %s", secondRestoreID)
 
 		// Verify old restore WITH branch was preserved
 		afterRestores := vm.APICallList(t, "GET", "/api/restores", nil)
 
-		var foundFullRestore bool
+		var foundFirstRestore bool
 		for _, restore := range afterRestores {
-			if restore["id"].(string) == fullRestoreID {
-				foundFullRestore = true
+			if restore["id"].(string) == firstRestoreID {
+				foundFirstRestore = true
 				break
 			}
 		}
-		require.True(t, foundFullRestore, "Old full restore should still exist (has branch: cb-full-branch)")
+		require.True(t, foundFirstRestore, "Old restore should still exist (has branch: cb-branch)")
 
 		t.Log("Verified old restore with branch was preserved during refresh")
 	})
 
 	// ===================================================================
-	// Test 7: New Branches Use Refreshed Restore
+	// Test 5: New Branches Use Refreshed Restore
 	// ===================================================================
 	t.Run("TestRefreshedBranch", func(t *testing.T) {
 		t.Log("Testing that new branches use refreshed restore...")
@@ -337,7 +248,7 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 	})
 
 	// ===================================================================
-	// Test 8: Multiple Branches (Port Allocation)
+	// Test 6: Multiple Branches (Port Allocation)
 	// ===================================================================
 	t.Run("CreateMultipleBranches", func(t *testing.T) {
 		t.Log("Testing multiple branch creation and port allocation...")
@@ -383,7 +294,7 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 	})
 
 	// ===================================================================
-	// Test 9: Verify Crunchy Bridge Integration Details
+	// Test 7: Verify Crunchy Bridge Integration Details
 	// ===================================================================
 	t.Run("VerifyCrunchyBridgeDetails", func(t *testing.T) {
 		t.Log("Verifying Crunchy Bridge integration details...")

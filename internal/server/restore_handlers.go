@@ -146,10 +146,17 @@ func (s *Server) triggerRestore(c *gin.Context) {
 		Bool("has_crunchy_bridge", hasCrunchyBridge).
 		Msg("Manually triggering restore")
 
+	// Determine schema-only flag
+	// Note: Crunchy Bridge (pgBackRest) doesn't support schema-only, only logical restore (pg_dump) does
+	schemaOnly := config.SchemaOnly
+	if hasCrunchyBridge {
+		schemaOnly = false
+	}
+
 	// Create a new restore record with UTC datetime-based name (e.g., restore_20251017143202)
 	restore := models.Restore{
 		Name:       models.GenerateRestoreName(),
-		SchemaOnly: config.SchemaOnly,
+		SchemaOnly: schemaOnly,
 		Port:       5432,
 	}
 
