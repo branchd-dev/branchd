@@ -340,12 +340,20 @@ func (s *Server) applyAnonymization(c *gin.Context) {
 		Str("restore_name", restore.Name).
 		Msg("Manually triggering anonymization")
 
+	// Determine the target database name based on restore type:
+	// - Crunchy Bridge: uses the database name from config (pgBackRest restores all databases)
+	// - Logical: uses the source database name from connection string (restored to database with same name as source)
+	targetDatabase := config.DatabaseName // Default for logical restores (extracted from connection string)
+	if config.CrunchyBridgeAPIKey != "" {
+		// Crunchy Bridge restore - use the configured database name
+		targetDatabase = config.CrunchyBridgeDatabaseName
+	}
+
 	// Apply anonymization rules
-	pgPort := postgresVersionToPort(config.PostgresVersion)
 	rulesApplied, err := anonymize.Apply(c.Request.Context(), s.db, anonymize.ApplyParams{
-		DatabaseName:    restore.Name,
+		DatabaseName:    targetDatabase,
 		PostgresVersion: config.PostgresVersion,
-		PostgresPort:    pgPort,
+		PostgresPort:    restore.Port,
 	}, s.logger)
 	if err != nil {
 		s.logger.Error().Err(err).Str("restore_id", restoreID).Msg("Failed to apply anonymization")

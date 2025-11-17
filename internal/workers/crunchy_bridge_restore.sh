@@ -42,16 +42,18 @@ die() {
     fi
 
     # Destroy ZFS dataset if it was created
-    if sudo zfs list "${ZFS_DATASET}" >/dev/null 2>&1; then
-        log "Destroying ZFS dataset..."
-        sudo zfs destroy -r "${ZFS_DATASET}" 2>/dev/null || log "Warning: Could not destroy ZFS dataset"
-    fi
+    # if sudo zfs list "${ZFS_DATASET}" >/dev/null 2>&1; then
+    #     log "Destroying ZFS dataset..."
+    #     sudo zfs destroy -r "${ZFS_DATASET}" 2>/dev/null || log "Warning: Could not destroy ZFS dataset"
+    # fi
+    log "WARNING: ZFS dataset ${ZFS_DATASET} left intact for debugging (not destroyed)"
 
     # Clean up pgBackRest config
-    if [ -f "${PGBACKREST_CONF}" ]; then
-        log "Cleaning up pgBackRest config..."
-        rm -f "${PGBACKREST_CONF}" 2>/dev/null || log "Warning: Could not remove pgBackRest config"
-    fi
+    # if [ -f "${PGBACKREST_CONF}" ]; then
+    #     log "Cleaning up pgBackRest config..."
+    #     rm -f "${PGBACKREST_CONF}" 2>/dev/null || log "Warning: Could not remove pgBackRest config"
+    # fi
+    log "WARNING: pgBackRest config ${PGBACKREST_CONF} left intact for debugging (not deleted)"
 
     # Write failure marker
     echo '__BRANCHD_RESTORE_FAILED__' >> "${RESTORE_LOG}"
@@ -129,80 +131,75 @@ sudo -u postgres cp /etc/postgresql-common/ssl/server.key "${DATA_DIR}/"
 sudo -u postgres chmod 0600 "${DATA_DIR}/server.key"
 sudo -u postgres chmod 0644 "${DATA_DIR}/server.crt"
 
-# Replace postgresql.conf with a clean config optimized for ephemeral dev branches
-# This removes all Crunchy Bridge specific settings and production-oriented configs
-log "Creating clean postgresql.conf for dev branch..."
-sudo -u postgres tee "${DATA_DIR}/postgresql.conf" > /dev/null << 'EOF'
-# Connection Settings
-listen_addresses = '127.0.0.1'
-port = ${PG_PORT}
-max_connections = 1000
+# Backup original Crunchy Bridge config for reference
+sudo -u postgres cp "${DATA_DIR}/postgresql.conf" "${DATA_DIR}/postgresql.conf.crunchybridge"
 
-# TLS/SSL
-ssl = on
+log "Extracting recovery-critical parameters from conf.d before removing include_dir..."
+
+# Extract recovery-critical parameters from conf.d files
+# These MUST be >= the primary server's values for recovery to succeed
+MAX_CONNECTIONS=$(sudo -u postgres grep -h "^max_connections" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "100")
+MAX_WORKER_PROCESSES=$(sudo -u postgres grep -h "^max_worker_processes" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "8")
+MAX_WAL_SENDERS=$(sudo -u postgres grep -h "^max_wal_senders" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "10")
+MAX_PREPARED_XACTS=$(sudo -u postgres grep -h "^max_prepared_transactions" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+MAX_LOCKS_PER_XACT=$(sudo -u postgres grep -h "^max_locks_per_transaction" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "64")
+
+log "Extracted parameters: max_connections=${MAX_CONNECTIONS}, max_worker_processes=${MAX_WORKER_PROCESSES}"
+
+log "Modifying postgresql.conf for dev branch..."
+
+# Remove problematic lines that would prevent startup
+sudo -u postgres sed -i \
+    -e '/^include_dir/d' \
+    -e '/^pgpodman\./d' \
+    -e '/^pg_parquet\./d' \
+    -e '/^cron\.use_background_workers/d' \
+    -e '/^ssl_ca_file/d' \
+    -e '/^archive_mode/d' \
+    -e '/^archive_command/d' \
+    -e '/^archive_timeout/d' \
+    "${DATA_DIR}/postgresql.conf"
+
+sudo -u postgres sed -i \
+    "s/shared_preload_libraries = 'pgaudit,pgpodman,anon,pg_squeeze,pg_parquet,pg_cron,pg_stat_statements'/shared_preload_libraries = 'pgaudit,pg_stat_statements'/" \
+    "${DATA_DIR}/postgresql.conf"
+
+# Change log destination from syslog to stderr for easier debugging
+sudo -u postgres sed -i \
+    "s/log_destination = 'syslog'/log_destination = 'stderr'/" \
+    "${DATA_DIR}/postgresql.conf"
+
+# Add log_directory since we changed from syslog
+if ! grep -q "^log_directory" "${DATA_DIR}/postgresql.conf"; then
+    echo "log_directory = 'log'" | sudo -u postgres tee -a "${DATA_DIR}/postgresql.conf" > /dev/null
+fi
+
+# Disable archive mode for dev branches
+echo "archive_mode = off" | sudo -u postgres tee -a "${DATA_DIR}/postgresql.conf" > /dev/null
+
+# Override network settings for local-only access (append at end to override any earlier settings)
+sudo -u postgres tee -a "${DATA_DIR}/postgresql.conf" > /dev/null << EOF
+
+# Branchd overrides for dev branch
+port = ${PG_PORT}
+listen_addresses = '127.0.0.1'
 ssl_cert_file = 'server.crt'
 ssl_key_file = 'server.key'
-ssl_min_protocol_version = 'TLSv1.2'
 
-# Authentication
-password_encryption = scram-sha-256
+# Recovery-critical parameters from Crunchy Bridge conf.d
+# These must be >= primary server values for recovery to succeed
+max_connections = ${MAX_CONNECTIONS}
+max_worker_processes = ${MAX_WORKER_PROCESSES}
+max_wal_senders = ${MAX_WAL_SENDERS}
+max_prepared_transactions = ${MAX_PREPARED_XACTS}
+max_locks_per_transaction = ${MAX_LOCKS_PER_XACT}
 
-# Resource Limits
-# Note: These parameters are set high to support pgBackRest recovery from production backups.
-# PostgreSQL requires these values to be >= the source database during WAL replay.
-shared_buffers = 128MB
-work_mem = 8MB
-maintenance_work_mem = 64MB
-effective_cache_size = 512MB
-max_worker_processes = 200
-max_parallel_workers_per_gather = 2
-max_parallel_workers = 4
-max_prepared_transactions = 100
-max_locks_per_transaction = 256
-max_pred_locks_per_transaction = 256
-
-# WAL Settings
-wal_level = logical
-max_wal_senders = 20
-max_replication_slots = 0
-max_wal_size = 512MB
-min_wal_size = 80MB
-
-# Extensions
-# Note: pgaudit is included because Crunchy Bridge databases have it installed
-shared_preload_libraries = 'pg_stat_statements,pgaudit'
-
-# Logging
-logging_collector = on
-log_destination = 'stderr'
-log_directory = 'log'
-log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
-log_rotation_age = 1d
-log_rotation_size = 100MB
-log_line_prefix = '%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
-log_timezone = 'UTC'
-
-# Performance
-random_page_cost = 1.1
-effective_io_concurrency = 200
-
-# Statistics
-track_io_timing = on
-track_functions = pl
-
-# Locale
-datestyle = 'iso, mdy'
-timezone = 'UTC'
-lc_messages = 'en_US.UTF-8'
-lc_monetary = 'en_US.UTF-8'
-lc_numeric = 'en_US.UTF-8'
-lc_time = 'en_US.UTF-8'
-default_text_search_config = 'pg_catalog.english'
+# Performance parameters optimized for dev environment
+shared_buffers = '128MB'
+huge_pages = try  # Changed from 'on' - VM may not have huge pages configured
 EOF
 
-# Substitute the port variable
-sudo -u postgres sed -i "s/\${PG_PORT}/${PG_PORT}/g" "${DATA_DIR}/postgresql.conf"
-log "postgresql.conf created"
+log "postgresql.conf configured"
 
 # Configure pg_hba.conf for local access only
 sudo -u postgres tee "${DATA_DIR}/pg_hba.conf" > /dev/null << EOF
@@ -226,12 +223,12 @@ Requires=zfs-mount.service
 Type=forking
 User=postgres
 Group=postgres
-ExecStart=${PG_BIN}/pg_ctl start -D ${DATA_DIR} -l ${DATA_DIR}/postgresql.log
+ExecStart=${PG_BIN}/pg_ctl start -t 3600 -D ${DATA_DIR} -l ${DATA_DIR}/postgresql.log
 ExecStop=${PG_BIN}/pg_ctl stop -D ${DATA_DIR} -m fast
 ExecReload=${PG_BIN}/pg_ctl reload -D ${DATA_DIR}
 KillMode=mixed
 KillSignal=SIGINT
-TimeoutStartSec=300
+TimeoutStartSec=3600
 TimeoutStopSec=300
 Restart=on-failure
 RestartSec=5s
