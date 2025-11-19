@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
 	"gorm.io/gorm"
 
@@ -110,9 +111,44 @@ func checkAndEnqueueRefreshTasks(client *asynq.Client, db *gorm.DB, logger zerol
 		return
 	}
 
+	// Calculate and update NextRefreshAt immediately after scheduling
+	// This prevents the scheduler from creating new restores every minute
+	now := time.Now()
+	nextRefresh := calculateNextRefreshTime(config.RefreshSchedule, now)
+	if nextRefresh != nil {
+		if err := db.Model(&config).Update("next_refresh_at", nextRefresh).Error; err != nil {
+			logger.Error().
+				Err(err).
+				Str("config_id", config.ID).
+				Msg("Failed to update next_refresh_at")
+		} else {
+			logger.Info().
+				Str("config_id", config.ID).
+				Time("next_refresh_at", *nextRefresh).
+				Msg("Updated next_refresh_at")
+		}
+	}
+
 	logger.Info().
 		Str("config_id", config.ID).
 		Str("database_id", database.ID).
 		Bool("schema_only", config.SchemaOnly).
 		Msg("Refresh restore task enqueued successfully")
+}
+
+// calculateNextRefreshTime calculates next refresh time from cron schedule
+func calculateNextRefreshTime(cronExpr string, from time.Time) *time.Time {
+	if cronExpr == "" {
+		return nil
+	}
+
+	// Parse cron expression (standard 5-field format: minute hour day-of-month month day-of-week)
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse(cronExpr)
+	if err != nil {
+		return nil
+	}
+
+	next := schedule.Next(from)
+	return &next
 }
