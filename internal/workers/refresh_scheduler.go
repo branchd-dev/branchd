@@ -61,7 +61,45 @@ func checkAndEnqueueRefreshTasks(client *asynq.Client, db *gorm.DB, logger zerol
 			}
 			return time.Time{}
 		}()).
-		Msg("Config refresh due - creating new database and enqueueing restore task")
+		Msg("Config refresh due - checking if new restore can be created")
+
+	// Check if we're already at or above max_restores limit
+	// Count restores without branches (eligible for cleanup)
+	var totalRestores int64
+	if err := db.Model(&models.Restore{}).Count(&totalRestores).Error; err != nil {
+		logger.Error().Err(err).Msg("Failed to count restores")
+		return
+	}
+
+	// Count restores with branches (protected from cleanup)
+	var restoresWithBranches int64
+	if err := db.Model(&models.Restore{}).
+		Joins("JOIN branches ON branches.restore_id = restores.id").
+		Distinct("restores.id").
+		Count(&restoresWithBranches).Error; err != nil {
+		logger.Error().Err(err).Msg("Failed to count restores with branches")
+		return
+	}
+
+	// Calculate how many restores can be cleaned up
+	cleanableRestores := totalRestores - restoresWithBranches
+
+	// If we're at or above max_restores and have no cleanable restores, skip
+	if int(totalRestores) >= config.MaxRestores && cleanableRestores == 0 {
+		logger.Warn().
+			Int64("total_restores", totalRestores).
+			Int64("restores_with_branches", restoresWithBranches).
+			Int("max_restores", config.MaxRestores).
+			Msg("Cannot create new restore - at max_restores limit and all restores have branches")
+
+		// Still update NextRefreshAt to prevent retrying every minute
+		now := time.Now()
+		nextRefresh := calculateNextRefreshTime(config.RefreshSchedule, now)
+		if nextRefresh != nil {
+			db.Model(&config).Update("next_refresh_at", nextRefresh)
+		}
+		return
+	}
 
 	// Determine schema-only flag
 	// Note: Crunchy Bridge (pgBackRest) doesn't support schema-only, only logical restore (pg_dump) does
