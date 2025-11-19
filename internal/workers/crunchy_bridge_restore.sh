@@ -28,18 +28,18 @@ die() {
     log "ERROR: $1" >&2
 
     # Stop PostgreSQL service if it was started
-    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-        log "Stopping PostgreSQL service..."
-        sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-    fi
+    # if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+    #     log "Stopping PostgreSQL service..."
+    #     sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    # fi
 
     # Remove systemd service
-    if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
-        log "Removing systemd service..."
-        sudo systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-        sudo rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-        sudo systemctl daemon-reload
-    fi
+    # if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+    #     log "Removing systemd service..."
+    #     sudo systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+    #     sudo rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    #     sudo systemctl daemon-reload
+    # fi
 
     # Destroy ZFS dataset if it was created
     # if sudo zfs list "${ZFS_DATASET}" >/dev/null 2>&1; then
@@ -159,11 +159,11 @@ PG_MAX_PREPARED_XACTS=$(sudo -u postgres grep -h "^max_prepared_transactions" "$
 PG_MAX_LOCKS_PER_XACT=$(sudo -u postgres grep -h "^max_locks_per_transaction" "${DATA_DIR}/postgresql.conf" 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "64")
 
 # Extract from conf.d files
-CONFD_MAX_CONNECTIONS=$(sudo -u postgres grep -h "^max_connections" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
-CONFD_MAX_WORKER_PROCESSES=$(sudo -u postgres grep -h "^max_worker_processes" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
-CONFD_MAX_WAL_SENDERS=$(sudo -u postgres grep -h "^max_wal_senders" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
-CONFD_MAX_PREPARED_XACTS=$(sudo -u postgres grep -h "^max_prepared_transactions" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
-CONFD_MAX_LOCKS_PER_XACT=$(sudo -u postgres grep -h "^max_locks_per_transaction" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_CONNECTIONS=$(sudo -u postgres grep -h "max_connections" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | grep -v "^\s*#" | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_WORKER_PROCESSES=$(sudo -u postgres grep -h "max_worker_processes" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | grep -v "^\s*#" | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_WAL_SENDERS=$(sudo -u postgres grep -h "max_wal_senders" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | grep -v "^\s*#" | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_PREPARED_XACTS=$(sudo -u postgres grep -h "max_prepared_transactions" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | grep -v "^\s*#" | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_LOCKS_PER_XACT=$(sudo -u postgres grep -h "max_locks_per_transaction" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | grep -v "^\s*#" | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
 
 # Use MAX of both to ensure recovery requirements are met
 MAX_CONNECTIONS=$(max_value "$PG_MAX_CONNECTIONS" "$CONFD_MAX_CONNECTIONS")

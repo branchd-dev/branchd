@@ -244,7 +244,7 @@ func (s *Service) executeBranchCreation(ctx context.Context, config *models.Conf
 		if strings.Contains(output, "BRANCHD_ERROR:DATABASE_NOT_READY") {
 			errorMsg := extractErrorMessage(output)
 			s.logger.Info().Str("branch_name", params.BranchName).Str("error_detail", errorMsg).Msg("Branch creation failed: source database not ready")
-			return nil, fmt.Errorf("instance is still in initial recovery. Please wait a few minutes and try again")
+			return nil, fmt.Errorf("restore is not accepting connections")
 		}
 		if strings.Contains(output, "BRANCHD_ERROR:RESTORE_NOT_RUNNING") {
 			errorMsg := extractErrorMessage(output)
