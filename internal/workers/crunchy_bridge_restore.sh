@@ -134,17 +134,43 @@ sudo -u postgres chmod 0644 "${DATA_DIR}/server.crt"
 # Backup original Crunchy Bridge config for reference
 sudo -u postgres cp "${DATA_DIR}/postgresql.conf" "${DATA_DIR}/postgresql.conf.crunchybridge"
 
-log "Extracting recovery-critical parameters from conf.d before removing include_dir..."
+log "Extracting recovery-critical parameters from postgresql.conf and conf.d..."
 
-# Extract recovery-critical parameters from conf.d files
+# Extract recovery-critical parameters from BOTH postgresql.conf (backup values) and conf.d
 # These MUST be >= the primary server's values for recovery to succeed
-MAX_CONNECTIONS=$(sudo -u postgres grep -h "^max_connections" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "100")
-MAX_WORKER_PROCESSES=$(sudo -u postgres grep -h "^max_worker_processes" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "8")
-MAX_WAL_SENDERS=$(sudo -u postgres grep -h "^max_wal_senders" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "10")
-MAX_PREPARED_XACTS=$(sudo -u postgres grep -h "^max_prepared_transactions" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
-MAX_LOCKS_PER_XACT=$(sudo -u postgres grep -h "^max_locks_per_transaction" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "64")
+# We take the MAX of both sources to ensure we meet recovery requirements
 
-log "Extracted parameters: max_connections=${MAX_CONNECTIONS}, max_worker_processes=${MAX_WORKER_PROCESSES}"
+# Helper function to get max of two numbers
+max_value() {
+    local val1=$1
+    local val2=$2
+    if [ "$val1" -ge "$val2" ]; then
+        echo "$val1"
+    else
+        echo "$val2"
+    fi
+}
+
+# Extract from main postgresql.conf (has correct backup values)
+PG_MAX_CONNECTIONS=$(sudo -u postgres grep -h "^max_connections" "${DATA_DIR}/postgresql.conf" 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "100")
+PG_MAX_WORKER_PROCESSES=$(sudo -u postgres grep -h "^max_worker_processes" "${DATA_DIR}/postgresql.conf" 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "8")
+PG_MAX_WAL_SENDERS=$(sudo -u postgres grep -h "^max_wal_senders" "${DATA_DIR}/postgresql.conf" 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "10")
+PG_MAX_PREPARED_XACTS=$(sudo -u postgres grep -h "^max_prepared_transactions" "${DATA_DIR}/postgresql.conf" 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+PG_MAX_LOCKS_PER_XACT=$(sudo -u postgres grep -h "^max_locks_per_transaction" "${DATA_DIR}/postgresql.conf" 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "64")
+
+# Extract from conf.d files
+CONFD_MAX_CONNECTIONS=$(sudo -u postgres grep -h "^max_connections" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_WORKER_PROCESSES=$(sudo -u postgres grep -h "^max_worker_processes" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_WAL_SENDERS=$(sudo -u postgres grep -h "^max_wal_senders" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_PREPARED_XACTS=$(sudo -u postgres grep -h "^max_prepared_transactions" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+CONFD_MAX_LOCKS_PER_XACT=$(sudo -u postgres grep -h "^max_locks_per_transaction" "${DATA_DIR}/conf.d/"*.conf 2>/dev/null | tail -1 | sed "s/.*=\s*['\"]*//" | sed "s/['\"].*//" || echo "0")
+
+# Use MAX of both to ensure recovery requirements are met
+MAX_CONNECTIONS=$(max_value "$PG_MAX_CONNECTIONS" "$CONFD_MAX_CONNECTIONS")
+MAX_WORKER_PROCESSES=$(max_value "$PG_MAX_WORKER_PROCESSES" "$CONFD_MAX_WORKER_PROCESSES")
+MAX_WAL_SENDERS=$(max_value "$PG_MAX_WAL_SENDERS" "$CONFD_MAX_WAL_SENDERS")
+MAX_PREPARED_XACTS=$(max_value "$PG_MAX_PREPARED_XACTS" "$CONFD_MAX_PREPARED_XACTS")
+MAX_LOCKS_PER_XACT=$(max_value "$PG_MAX_LOCKS_PER_XACT" "$CONFD_MAX_LOCKS_PER_XACT")
 
 log "Modifying postgresql.conf for dev branch..."
 
