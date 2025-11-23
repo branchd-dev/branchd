@@ -249,12 +249,13 @@ Requires=zfs-mount.service
 Type=forking
 User=postgres
 Group=postgres
-ExecStart=${PG_BIN}/pg_ctl start -t 3600 -D ${DATA_DIR} -l ${DATA_DIR}/postgresql.log
+# Long timeout (2 hours) to allow WAL replay for large databases (e.g., 1TB+ databases can take 30+ minutes)
+ExecStart=${PG_BIN}/pg_ctl start -t 7200 -D ${DATA_DIR} -l ${DATA_DIR}/postgresql.log
 ExecStop=${PG_BIN}/pg_ctl stop -D ${DATA_DIR} -m fast
 ExecReload=${PG_BIN}/pg_ctl reload -D ${DATA_DIR}
 KillMode=mixed
 KillSignal=SIGINT
-TimeoutStartSec=3600
+TimeoutStartSec=7200
 TimeoutStopSec=300
 Restart=on-failure
 RestartSec=5s
@@ -288,7 +289,16 @@ while [ ${RETRY_COUNT} -lt ${MAX_RETRIES} ]; do
     sleep 1
 done
 
-# 8. Clean up pgBackRest config (contains credentials)
+# 8. Clean up Crunchy Bridge internal schemas and extensions
+log "Cleaning up schemas and extensions..."
+
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -h 127.0.0.1 -d ${DATABASE_NAME} << 'EOSQL'
+DROP SCHEMA IF EXISTS perfsnap CASCADE;
+DROP SCHEMA IF EXISTS hint_plan CASCADE;
+DROP EXTENSION IF EXISTS crunchy_pooler CASCADE;
+DROP EXTENSION IF EXISTS pg_stat_statements CASCADE;
+EOSQL
+
 log "Cleaning up pgBackRest config..."
 if [ -f "${PGBACKREST_CONF}" ]; then
     rm -f "${PGBACKREST_CONF}" || log "Warning: Could not remove pgBackRest config"
