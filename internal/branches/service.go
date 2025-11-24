@@ -739,7 +739,31 @@ func (s *Service) DeleteRestore(ctx context.Context, restore *models.Restore) er
 			Msg("Failed to remove service file (continuing anyway)")
 	}
 
-	// 3. Destroy ZFS dataset (includes all data)
+	// 2.5. Force kill any remaining PostgreSQL processes using the data directory
+	dataDir := fmt.Sprintf("/opt/branchd/%s/data", restore.Name)
+	s.logger.Info().Str("data_dir", dataDir).Msg("Killing any remaining PostgreSQL processes")
+	killPostgresCmd := fmt.Sprintf(`
+		pids=$(sudo lsof -t +D %s 2>/dev/null || true)
+		if [ -n "$pids" ]; then
+			echo "Killing processes: $pids"
+			sudo kill -TERM $pids 2>/dev/null || true
+			sleep 2
+			# Check again and use SIGKILL if needed
+			pids=$(sudo lsof -t +D %s 2>/dev/null || true)
+			if [ -n "$pids" ]; then
+				sudo kill -9 $pids 2>/dev/null || true
+			fi
+		fi
+	`, dataDir, dataDir)
+	cmd = exec.CommandContext(ctx, "bash", "-c", killPostgresCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		s.logger.Warn().
+			Err(err).
+			Str("output", string(output)).
+			Msg("Failed to kill remaining processes (continuing anyway)")
+	}
+
+	// 3. Destroy ZFS dataset
 	s.logger.Info().Str("zfs_dataset", zfsDataset).Msg("Destroying ZFS dataset")
 	destroyCmd := fmt.Sprintf("sudo zfs destroy -r %s", zfsDataset)
 	cmd = exec.CommandContext(ctx, "bash", "-c", destroyCmd)
@@ -753,10 +777,6 @@ func (s *Service) DeleteRestore(ctx context.Context, restore *models.Restore) er
 			Msg("Failed to destroy ZFS dataset")
 		return fmt.Errorf("failed to destroy ZFS dataset: %w", err)
 	}
-
-	s.logger.Info().
-		Str("zfs_dataset", zfsDataset).
-		Msg("ZFS dataset destroyed successfully")
 
 	// 4. Delete restore record from SQLite
 	if err := s.db.Delete(restore).Error; err != nil {
