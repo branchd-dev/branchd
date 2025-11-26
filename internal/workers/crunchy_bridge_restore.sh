@@ -249,13 +249,13 @@ Requires=zfs-mount.service
 Type=forking
 User=postgres
 Group=postgres
-# Long timeout (2 hours) to allow WAL replay for large databases (e.g., 1TB+ databases can take 30+ minutes)
-ExecStart=${PG_BIN}/pg_ctl start -t 7200 -D ${DATA_DIR} -l ${DATA_DIR}/postgresql.log
+# Long timeout (4 hours) to allow WAL replay for large databases
+ExecStart=${PG_BIN}/pg_ctl start -t 14400 -D ${DATA_DIR} -l ${DATA_DIR}/postgresql.log
 ExecStop=${PG_BIN}/pg_ctl stop -D ${DATA_DIR} -m fast
 ExecReload=${PG_BIN}/pg_ctl reload -D ${DATA_DIR}
 KillMode=mixed
 KillSignal=SIGINT
-TimeoutStartSec=7200
+TimeoutStartSec=14400
 TimeoutStopSec=300
 Restart=on-failure
 RestartSec=5s
