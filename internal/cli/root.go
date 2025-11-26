@@ -17,8 +17,8 @@ var rootCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		// Skip update check for the update and version commands
-		if cmd.Name() == "update" || cmd.Name() == "version" {
+		// Skip update check
+		if cmd.Name() == "update" || cmd.Name() == "checkout" {
 			return
 		}
 
