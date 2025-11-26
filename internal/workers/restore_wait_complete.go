@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -88,7 +89,6 @@ func HandleRestoreWaitComplete(ctx context.Context, t *asynq.Task, client *asynq
 			Str("restore_id", restoreModel.ID).
 			Msg("Restore completed successfully")
 
-		// Apply anonymization rules before marking as ready
 		// Determine the target database name based on restore type:
 		// - Crunchy Bridge: uses the database name from config (pgBackRest restores all databases)
 		// - Logical: uses the source database name from connection string (restored to database with same name as source)
@@ -98,6 +98,15 @@ func HandleRestoreWaitComplete(ctx context.Context, t *asynq.Task, client *asynq
 			targetDatabase = config.CrunchyBridgeDatabaseName
 		}
 
+		// Execute post-restore SQL if configured (before anonymization)
+		if config.PostRestoreSQL != "" {
+			if err := executePostRestoreSQL(ctx, config.PostRestoreSQL, targetDatabase, config.PostgresVersion, restoreModel.Port, logger); err != nil {
+				logger.Error().Err(err).Msg("Failed to execute post-restore SQL")
+				return fmt.Errorf("failed to execute post-restore SQL: %w", err)
+			}
+		}
+
+		// Apply anonymization rules before marking as ready
 		_, err := anonymize.Apply(ctx, db, anonymize.ApplyParams{
 			DatabaseName:    targetDatabase,
 			PostgresVersion: config.PostgresVersion,
@@ -180,4 +189,49 @@ func calculateNextRefresh(cronExpr string, from time.Time) *time.Time {
 
 	next := schedule.Next(from)
 	return &next
+}
+
+// executePostRestoreSQL executes custom SQL statements after restore completes
+// This runs before anonymization rules are applied
+func executePostRestoreSQL(ctx context.Context, sql, databaseName, postgresVersion string, port int, logger zerolog.Logger) error {
+	logger.Info().
+		Str("database_name", databaseName).
+		Int("port", port).
+		Msg("Executing post-restore SQL")
+
+	script := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+
+DATABASE_NAME="%s"
+PG_VERSION="%s"
+PG_PORT="%d"
+PG_BIN="/usr/lib/postgresql/${PG_VERSION}/bin"
+
+echo "Executing post-restore SQL on database ${DATABASE_NAME}"
+
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -d "${DATABASE_NAME}" <<'POST_RESTORE_SQL'
+%s
+POST_RESTORE_SQL
+
+echo "Post-restore SQL completed successfully"
+`, databaseName, postgresVersion, port, sql)
+
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	outputBytes, err := cmd.CombinedOutput()
+	output := string(outputBytes)
+	if err != nil {
+		logger.Error().
+			Err(err).
+			Str("output", output).
+			Str("database_name", databaseName).
+			Msg("Failed to execute post-restore SQL")
+		return fmt.Errorf("post-restore SQL execution failed: %w", err)
+	}
+
+	logger.Info().
+		Str("database_name", databaseName).
+		Str("output", output).
+		Msg("Post-restore SQL executed successfully")
+
+	return nil
 }

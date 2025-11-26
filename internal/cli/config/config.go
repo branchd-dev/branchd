@@ -141,8 +141,9 @@ func (r *AnonRule) Parse() (ParsedAnonRule, error) {
 
 // Config represents the CLI configuration file
 type Config struct {
-	Servers   []Server   `json:"servers"`
-	AnonRules []AnonRule `json:"anonRules,omitempty"`
+	Servers        []Server   `json:"servers"`
+	AnonRules      []AnonRule `json:"anonRules,omitempty"`
+	PostRestoreSQL string     `json:"postRestoreSQL,omitempty"`
 }
 
 // DefaultConfig returns a default configuration with example servers

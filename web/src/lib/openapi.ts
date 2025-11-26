@@ -78,6 +78,7 @@ export interface InternalServerConfigResponse {
   lets_encrypt_email?: string;
   max_restores?: number;
   next_refresh_at?: string;
+  post_restore_sql?: string;
   postgres_version?: string;
   refresh_schedule?: string;
   schema_only?: boolean;
@@ -163,6 +164,7 @@ export interface InternalServerUpdateConfigRequest {
   domain?: string;
   letsEncryptEmail?: string;
   maxRestores?: number;
+  postRestoreSQL?: string;
   postgresVersion?: string;
   refreshSchedule?: string;
   schemaOnly?: boolean;

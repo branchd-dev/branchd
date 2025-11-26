@@ -41,20 +41,22 @@ type ConfigResponse struct {
 	CrunchyBridgeAPIKey       string     `json:"crunchy_bridge_api_key"`
 	CrunchyBridgeClusterName  string     `json:"crunchy_bridge_cluster_name"`
 	CrunchyBridgeDatabaseName string     `json:"crunchy_bridge_database_name"`
+	PostRestoreSQL            string     `json:"post_restore_sql"`
 }
 
 // UpdateConfigRequest represents the request to update configuration
 type UpdateConfigRequest struct {
-	ConnectionString          string `json:"connectionString"`
-	PostgresVersion           string `json:"postgresVersion"`
-	SchemaOnly                *bool  `json:"schemaOnly"`
-	RefreshSchedule           string `json:"refreshSchedule"`
-	Domain                    string `json:"domain"`
-	LetsEncryptEmail          string `json:"letsEncryptEmail"`
-	MaxRestores               *int   `json:"maxRestores"`
-	CrunchyBridgeAPIKey       string `json:"crunchyBridgeApiKey"`
-	CrunchyBridgeClusterName  string `json:"crunchyBridgeClusterName"`
-	CrunchyBridgeDatabaseName string `json:"crunchyBridgeDatabaseName"`
+	ConnectionString          string  `json:"connectionString"`
+	PostgresVersion           string  `json:"postgresVersion"`
+	SchemaOnly                *bool   `json:"schemaOnly"`
+	RefreshSchedule           string  `json:"refreshSchedule"`
+	Domain                    string  `json:"domain"`
+	LetsEncryptEmail          string  `json:"letsEncryptEmail"`
+	MaxRestores               *int    `json:"maxRestores"`
+	CrunchyBridgeAPIKey       string  `json:"crunchyBridgeApiKey"`
+	CrunchyBridgeClusterName  string  `json:"crunchyBridgeClusterName"`
+	CrunchyBridgeDatabaseName string  `json:"crunchyBridgeDatabaseName"`
+	PostRestoreSQL            *string `json:"postRestoreSQL"`
 }
 
 // @Summary Get configuration
@@ -94,6 +96,7 @@ func (s *Server) getConfig(c *gin.Context) {
 		CrunchyBridgeAPIKey:       redactSecret(config.CrunchyBridgeAPIKey),
 		CrunchyBridgeClusterName:  config.CrunchyBridgeClusterName,
 		CrunchyBridgeDatabaseName: config.CrunchyBridgeDatabaseName,
+		PostRestoreSQL:            config.PostRestoreSQL,
 	})
 }
 
@@ -261,6 +264,11 @@ func (s *Server) updateConfig(c *gin.Context) {
 	config.Domain = req.Domain
 	config.LetsEncryptEmail = req.LetsEncryptEmail
 
+	// Update post-restore SQL if provided (allow empty string to clear)
+	if req.PostRestoreSQL != nil {
+		config.PostRestoreSQL = *req.PostRestoreSQL
+	}
+
 	// If domain is set, configure Caddy with Let's Encrypt
 	if req.Domain != "" {
 		if err := s.configureCaddy(req.Domain, req.LetsEncryptEmail); err != nil {
@@ -299,6 +307,7 @@ func (s *Server) updateConfig(c *gin.Context) {
 		CrunchyBridgeAPIKey:       redactSecret(config.CrunchyBridgeAPIKey),
 		CrunchyBridgeClusterName:  config.CrunchyBridgeClusterName,
 		CrunchyBridgeDatabaseName: config.CrunchyBridgeDatabaseName,
+		PostRestoreSQL:            config.PostRestoreSQL,
 	})
 }
 

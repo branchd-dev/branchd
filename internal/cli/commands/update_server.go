@@ -35,22 +35,20 @@ func runUpdateServer() error {
 	// Update all servers
 	for _, server := range cfg.Servers {
 		if server.IP == "" {
-			fmt.Printf("⚠ Skipping server '%s' (no IP configured)\n", server.Alias)
+			fmt.Printf("Skipping server '%s' (no IP configured)\n", server.Alias)
 			continue
 		}
-
-		fmt.Printf("Updating server '%s' (%s)...\n", server.Alias, server.IP)
 
 		// Create API client
 		apiClient := client.New(server.IP)
 
 		// Trigger update
 		if err := apiClient.UpdateServer(server.IP); err != nil {
-			fmt.Printf("✗ Failed to update server '%s': %v\n", server.Alias, err)
+			fmt.Printf("Failed to update server '%s': %v\n", server.Alias, err)
 			continue
 		}
 
-		fmt.Printf("✓ Update triggered for server '%s' (takes ~1 minute)\n", server.Alias)
+		fmt.Printf("Update triggered on server '%s'\n", server.Alias)
 	}
 
 	return nil

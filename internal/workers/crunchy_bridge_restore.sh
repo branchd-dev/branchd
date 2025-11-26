@@ -293,10 +293,7 @@ done
 log "Cleaning up schemas and extensions..."
 
 sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -h 127.0.0.1 -d ${DATABASE_NAME} << 'EOSQL'
-DROP SCHEMA IF EXISTS perfsnap CASCADE;
-DROP SCHEMA IF EXISTS hint_plan CASCADE;
 DROP EXTENSION IF EXISTS crunchy_pooler CASCADE;
-DROP EXTENSION IF EXISTS pg_stat_statements CASCADE;
 EOSQL
 
 log "Cleaning up pgBackRest config..."

@@ -56,6 +56,9 @@ type Config struct {
 	Domain           string `json:"domain"`             // Custom domain (e.g. "db.company.com"), empty = use self-signed cert
 	LetsEncryptEmail string `json:"lets_encrypt_email"` // Email for Let's Encrypt ACME, required if Domain is set
 
+	// Post-restore SQL (executed after restore, before anonymization)
+	PostRestoreSQL string `json:"post_restore_sql" gorm:"type:text"` // SQL statements to run after restore (e.g., TRUNCATE, ANALYZE)
+
 	// Computed fields (populated at runtime, not persisted)
 	DatabaseName string `json:"database_name" gorm:"-"` // Extracted from ConnectionString
 }

@@ -7,6 +7,7 @@ import type {
 import { Button } from "../shadcn/components/ui/button";
 import { Input } from "../shadcn/components/ui/input";
 import { Label } from "../shadcn/components/ui/label";
+import { Textarea } from "../shadcn/components/ui/textarea";
 import { Alert, AlertDescription } from "../shadcn/components/ui/alert";
 import { Progress } from "../shadcn/components/ui/progress";
 import { Loader2, ArrowLeft, Info, TriangleAlert } from "lucide-react";
@@ -53,6 +54,7 @@ export function SettingsPage() {
   const [maxRestores, setMaxRestores] = useState(1);
   const [domain, setDomain] = useState("");
   const [letsEncryptEmail, setLetsEncryptEmail] = useState("");
+  const [postRestoreSQL, setPostRestoreSQL] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -104,6 +106,7 @@ export function SettingsPage() {
       setMaxRestores(configData.max_restores || 1);
       setDomain(configData.domain || "");
       setLetsEncryptEmail(configData.lets_encrypt_email || "");
+      setPostRestoreSQL(configData.post_restore_sql || "");
 
       // Fetch system info
       try {
@@ -151,6 +154,7 @@ export function SettingsPage() {
         maxRestores: maxRestores,
         domain: domain || undefined,
         letsEncryptEmail: letsEncryptEmail || undefined,
+        postRestoreSQL: postRestoreSQL, // Send empty string to clear
       };
 
       if (restoreSource === "direct") {
@@ -622,6 +626,34 @@ export function SettingsPage() {
                   </ul>
                 </AlertDescription>
               </Alert>
+            </div>
+
+            <div className="border-t pt-4 space-y-4">
+              <div>
+                <Label htmlFor="postRestoreSQL" className="text-base">
+                  Post-Restore SQL
+                </Label>
+                <p className="text-sm text-gray-500 mt-1 mb-3">
+                  SQL statements to run after each restore, before anonymization
+                  rules
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Textarea
+                  id="postRestoreSQL"
+                  placeholder="TRUNCATE some_table;&#10;ANALYZE;&#10;-- Add your SQL statements here"
+                  value={postRestoreSQL}
+                  onChange={(e) => setPostRestoreSQL(e.target.value)}
+                  className="font-mono text-sm min-h-[120px]"
+                  disabled={saving}
+                />
+                <p className="text-xs text-gray-500">
+                  Enter SQL statements to execute after each restore completes.
+                  These run before anonymization rules are applied. Leave empty
+                  to skip.
+                </p>
+              </div>
             </div>
           </CardContent>
         </Card>

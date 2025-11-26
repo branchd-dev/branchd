@@ -323,3 +323,50 @@ func (c *Client) UpdateAnonRules(serverIP string, rules []AnonRule) error {
 
 	return nil
 }
+
+// UpdateConfigRequest represents the config update request
+type UpdateConfigRequest struct {
+	PostRestoreSQL *string `json:"postRestoreSQL,omitempty"`
+}
+
+// UpdateConfig updates server configuration (e.g., post-restore SQL)
+func (c *Client) UpdateConfig(serverIP string, postRestoreSQL *string) error {
+	token, err := auth.LoadToken(serverIP)
+	if err != nil {
+		return err
+	}
+
+	reqBody := UpdateConfigRequest{
+		PostRestoreSQL: postRestoreSQL,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(
+		"PATCH",
+		fmt.Sprintf("%s/api/config", c.baseURL),
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update config (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
