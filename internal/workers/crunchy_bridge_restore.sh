@@ -292,7 +292,9 @@ done
 # 8. Clean up Crunchy Bridge internal schemas and extensions
 log "Cleaning up schemas and extensions..."
 
-sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -h 127.0.0.1 -d ${DATABASE_NAME} << 'EOSQL'
+# Use Unix socket connection (no -h flag) to leverage peer authentication
+# This avoids needing the postgres password from the restored database
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -d ${DATABASE_NAME} << 'EOSQL'
 DROP EXTENSION IF EXISTS crunchy_pooler CASCADE;
 EOSQL
 
