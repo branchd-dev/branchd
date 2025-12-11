@@ -22,7 +22,8 @@ var crunchyBridgeRestoreScript string
 type crunchyBridgeRestoreParams struct {
 	PgVersion           string
 	PgPort              int
-	DatabaseName        string
+	RestoreName         string // Name of the restore (e.g., restore_20251211000011) - used for logs, ZFS, service
+	TargetDatabaseName  string // Actual database name in PostgreSQL
 	DataDir             string
 	PgBackRestConfPath  string
 	StanzaName          string
@@ -132,7 +133,8 @@ func (p *CrunchyBridgeProvider) StartRestore(ctx context.Context, params Restore
 	scriptParams := crunchyBridgeRestoreParams{
 		PgVersion:          params.Config.PostgresVersion,
 		PgPort:             params.Port,
-		DatabaseName:       params.Restore.Name,
+		RestoreName:        params.Restore.Name,
+		TargetDatabaseName: params.Config.CrunchyBridgeDatabaseName,
 		DataDir:            dataDir,
 		PgBackRestConfPath: pgbackrestConfPath,
 		StanzaName:         backupToken.Stanza,

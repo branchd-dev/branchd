@@ -5,19 +5,20 @@ set -euo pipefail
 # Configuration from template
 readonly PG_VERSION="{{.PgVersion}}"
 readonly PG_PORT="{{.PgPort}}"
-readonly DATABASE_NAME="{{.DatabaseName}}"
+readonly RESTORE_NAME="{{.RestoreName}}"              # e.g., restore_20251211000011
+readonly TARGET_DATABASE_NAME="{{.TargetDatabaseName}}" # e.g., db_prod
 readonly DATA_DIR="{{.DataDir}}"       # e.g., /opt/branchd/restore_20250915120000/data
 readonly PGBACKREST_CONF="{{.PgBackRestConfPath}}"
 readonly STANZA_NAME="{{.StanzaName}}"
 
 # Paths
 readonly RESTORE_LOG_DIR="/var/log/branchd"
-readonly RESTORE_LOG="${RESTORE_LOG_DIR}/restore-${DATABASE_NAME}.log"
-readonly RESTORE_PID="${RESTORE_LOG_DIR}/restore-${DATABASE_NAME}.pid"
+readonly RESTORE_LOG="${RESTORE_LOG_DIR}/restore-${RESTORE_NAME}.log"
+readonly RESTORE_PID="${RESTORE_LOG_DIR}/restore-${RESTORE_NAME}.pid"
 readonly PG_BIN="/usr/lib/postgresql/${PG_VERSION}/bin"
 readonly RESTORE_DATASET_PATH=$(dirname "${DATA_DIR}")  # /opt/branchd/restore_YYYYMMDDHHMMSS
-readonly ZFS_DATASET="tank/${DATABASE_NAME}"
-readonly SERVICE_NAME="branchd-restore-${DATABASE_NAME}"
+readonly ZFS_DATASET="tank/${RESTORE_NAME}"
+readonly SERVICE_NAME="branchd-restore-${RESTORE_NAME}"
 
 # Helper functions
 log() {
@@ -65,7 +66,7 @@ die() {
     exit 1
 }
 
-log "Starting Crunchy Bridge restore: ${DATABASE_NAME}"
+log "Starting Crunchy Bridge restore: ${RESTORE_NAME}"
 log "PostgreSQL version: ${PG_VERSION}, Port: ${PG_PORT}"
 log "Data directory: ${DATA_DIR}"
 log "Stanza: ${STANZA_NAME}"
@@ -241,7 +242,7 @@ log "PostgreSQL configuration complete"
 log "Creating systemd service: ${SERVICE_NAME}"
 sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null << EOF
 [Unit]
-Description=PostgreSQL Restore Cluster from Crunchy Bridge (${DATABASE_NAME})
+Description=PostgreSQL Restore Cluster from Crunchy Bridge (${RESTORE_NAME})
 After=network.target zfs-mount.service
 Requires=zfs-mount.service
 
@@ -294,7 +295,7 @@ log "Cleaning up schemas and extensions..."
 
 # Use Unix socket connection (no -h flag) to leverage peer authentication
 # This avoids needing the postgres password from the restored database
-sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -d ${DATABASE_NAME} << 'EOSQL'
+sudo -u postgres ${PG_BIN}/psql -p ${PG_PORT} -d ${TARGET_DATABASE_NAME} << 'EOSQL'
 DROP EXTENSION IF EXISTS crunchy_pooler CASCADE;
 EOSQL
 
