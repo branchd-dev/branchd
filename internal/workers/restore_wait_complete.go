@@ -151,9 +151,9 @@ func HandleRestoreWaitComplete(ctx context.Context, t *asynq.Task, client *asynq
 			}
 		}
 
-		// Cleanup stale restores with no branches after successful restore
-		if err := cleanupStaleRestores(ctx, db, restoreModel.ID, logger); err != nil {
-			logger.Warn().Err(err).Msg("Failed to cleanup stale restores (non-fatal)")
+		// Delete stale restores (restores without branches) after successful restore
+		if err := deleteStaleRestores(ctx, db, restoreModel.ID, logger); err != nil {
+			logger.Warn().Err(err).Msg("Failed to delete stale restores (non-fatal)")
 		}
 
 		return nil

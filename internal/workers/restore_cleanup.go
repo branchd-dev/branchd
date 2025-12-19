@@ -90,77 +90,49 @@ func deleteRestore(ctx context.Context, db *gorm.DB, restore *models.Restore, lo
 	return nil
 }
 
-// cleanupStaleRestores removes old restores to maintain the MaxRestores limit
-// Excludes the specified restore ID (typically the one that just completed)
-// Deletes oldest restores without branches first, never deletes restores with branches
-func cleanupStaleRestores(ctx context.Context, db *gorm.DB, excludeRestoreID string, logger zerolog.Logger) error {
-	// Load config to get MaxRestores
-	var config models.Config
-	if err := db.First(&config).Error; err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Find all restores with branches preloaded, ordered by creation (oldest first)
+// deleteStaleRestores removes all restores that have no branches.
+// A "stale" restore is one that has no branches attached to it.
+// This is called after every successful restore to clean up unused restores.
+// The excludeRestoreID parameter prevents deleting the just-completed restore.
+func deleteStaleRestores(ctx context.Context, db *gorm.DB, excludeRestoreID string, logger zerolog.Logger) error {
+	// Find all restores with branches preloaded
 	var allRestores []models.Restore
-	if err := db.Preload("Branches").Order("created_at ASC").Find(&allRestores).Error; err != nil {
+	if err := db.Preload("Branches").Find(&allRestores).Error; err != nil {
 		return fmt.Errorf("failed to load restores: %w", err)
 	}
 
-	// Count total restores
-	totalRestores := len(allRestores)
-	if totalRestores <= config.MaxRestores {
-		logger.Debug().
-			Int("total_restores", totalRestores).
-			Int("max_restores", config.MaxRestores).
-			Msg("Total restores within limit, no cleanup needed")
-		return nil
-	}
-
-	// We need to delete (totalRestores - MaxRestores) restores
-	toDeleteCount := totalRestores - config.MaxRestores
-
-	// Filter restores that can be deleted (no branches, not excluded)
-	// Start with oldest first to preserve newer restores
-	var toDelete []models.Restore
+	// Find stale restores (no branches, not the just-completed one)
+	var staleRestores []models.Restore
 	for _, restore := range allRestores {
-		if len(toDelete) >= toDeleteCount {
-			break // We've found enough to delete
-		}
+		hasBranches := len(restore.Branches) > 0
+		isExcluded := restore.ID == excludeRestoreID
 
-		hasNoBranches := len(restore.Branches) == 0
-		shouldExclude := restore.ID == excludeRestoreID
-
-		if hasNoBranches && !shouldExclude {
-			toDelete = append(toDelete, restore)
+		if !hasBranches && !isExcluded {
+			staleRestores = append(staleRestores, restore)
 		}
 	}
 
-	if len(toDelete) == 0 {
-		logger.Debug().
-			Int("total_restores", totalRestores).
-			Int("max_restores", config.MaxRestores).
-			Msg("No eligible restores to clean up (all have branches or are excluded)")
+	if len(staleRestores) == 0 {
+		logger.Debug().Msg("No stale restores to clean up")
 		return nil
 	}
 
 	logger.Info().
-		Int("count", len(toDelete)).
-		Int("total_restores", totalRestores).
-		Int("max_restores", config.MaxRestores).
-		Msg("Cleaning up old restores to meet MaxRestores limit")
+		Int("count", len(staleRestores)).
+		Msg("Deleting stale restores (restores without branches)")
 
-	// Delete each old restore
-	for _, restore := range toDelete {
+	// Delete each stale restore
+	for _, restore := range staleRestores {
 		logger.Info().
 			Str("restore_id", restore.ID).
 			Str("restore_name", restore.Name).
-			Msg("Deleting old restore")
+			Msg("Deleting stale restore")
 
 		if err := deleteRestore(ctx, db, &restore, logger); err != nil {
 			logger.Error().
 				Err(err).
 				Str("restore_id", restore.ID).
-				Msg("Failed to delete restore")
+				Msg("Failed to delete stale restore")
 			// Continue with other restores even if one fails
 			continue
 		}
