@@ -76,10 +76,10 @@ func TestCrunchyBridgeIntegration(t *testing.T) {
 
 		// Configure Crunchy Bridge credentials via PATCH /api/config
 		vm.APICall(t, "PATCH", "/api/config", map[string]interface{}{
-			"crunchyBridgeApiKey":      crunchyBridgeAPIKey,
-			"crunchyBridgeClusterName": crunchyBridgeClusterName,
+			"crunchyBridgeApiKey":       crunchyBridgeAPIKey,
+			"crunchyBridgeClusterName":  crunchyBridgeClusterName,
 			"crunchyBridgeDatabaseName": crunchyBridgeDatabaseName,
-			"postgresVersion":          postgresVersion,
+			"postgresVersion":           postgresVersion,
 		})
 
 		// Verify config was updated

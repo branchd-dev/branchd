@@ -98,8 +98,8 @@ func (s *Server) deleteRestore(c *gin.Context) {
 		return
 	}
 
-	// Delete restore using branches service
-	if err := s.branchesService.DeleteRestore(c.Request.Context(), &restore); err != nil {
+	// Delete restore using restores service
+	if err := s.restoresService.Delete(c.Request.Context(), &restore); err != nil {
 		s.logger.Error().Err(err).Str("restore_id", restoreID).Msg("Failed to delete restore")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete restore"})
 		return

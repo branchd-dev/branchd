@@ -37,8 +37,8 @@ type Config struct {
 	SchemaOnly       bool   `json:"schema_only" gorm:"not null;default:true"` // If true, only restore schema (no data)
 
 	// Crunchy Bridge integration (alternative to ConnectionString)
-	CrunchyBridgeAPIKey      string `json:"crunchy_bridge_api_key" gorm:"type:text"`       // Crunchy Bridge API key
-	CrunchyBridgeClusterName string `json:"crunchy_bridge_cluster_name" gorm:"type:text"`  // Cluster name
+	CrunchyBridgeAPIKey       string `json:"crunchy_bridge_api_key" gorm:"type:text"`       // Crunchy Bridge API key
+	CrunchyBridgeClusterName  string `json:"crunchy_bridge_cluster_name" gorm:"type:text"`  // Cluster name
 	CrunchyBridgeDatabaseName string `json:"crunchy_bridge_database_name" gorm:"type:text"` // Database name
 
 	// PostgreSQL configuration for branches

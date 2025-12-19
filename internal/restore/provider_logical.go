@@ -1,4 +1,4 @@
-package workers
+package restore
 
 import (
 	"bytes"
@@ -13,7 +13,6 @@ import (
 
 	"github.com/branchd-dev/branchd/internal/models"
 	"github.com/branchd-dev/branchd/internal/pgtuning"
-	"github.com/branchd-dev/branchd/internal/restore"
 	"github.com/branchd-dev/branchd/internal/sysinfo"
 )
 
@@ -23,12 +22,12 @@ var logicalRestoreScript string
 type logicalRestoreParams struct {
 	ConnectionString   string
 	PgVersion          string
-	PgPort             int    // Dynamic port for this restore's cluster
-	RestoreName        string // Name of the restore (e.g., restore_20251115173353)
-	SourceDatabaseName string // Source database name from connection string (e.g., quic_test)
+	PgPort             int
+	DatabaseName       string // Used for log/PID file naming (restore name)
+	SourceDatabaseName string // Source database name from connection string
 	SchemaOnly         string // "true" or "false" for template
 	ParallelJobs       int
-	DumpDir            string // Directory for pg_dump output (on EBS zpool)
+	DumpDir            string // Directory for pg_dump output
 	DataDir            string // PostgreSQL data directory for initdb
 
 	// PostgreSQL tuning parameters
@@ -36,25 +35,25 @@ type logicalRestoreParams struct {
 	ResetSQL []string // SQL statements to reset tuning
 }
 
-// LogicalRestoreProvider implements logical restore via pg_dump/pg_restore
-type LogicalRestoreProvider struct {
+// LogicalProvider implements logical restore via pg_dump/pg_restore
+type LogicalProvider struct {
 	logger zerolog.Logger
 }
 
-// NewLogicalRestoreProvider creates a new logical restore provider
-func NewLogicalRestoreProvider(logger zerolog.Logger) *LogicalRestoreProvider {
-	return &LogicalRestoreProvider{
+// NewLogicalProvider creates a new logical restore provider
+func NewLogicalProvider(logger zerolog.Logger) *LogicalProvider {
+	return &LogicalProvider{
 		logger: logger,
 	}
 }
 
 // GetProviderType returns the provider type identifier
-func (p *LogicalRestoreProvider) GetProviderType() string {
-	return "logical"
+func (p *LogicalProvider) GetProviderType() string {
+	return string(ProviderTypeLogical)
 }
 
 // ValidateConfig validates that logical restore is properly configured
-func (p *LogicalRestoreProvider) ValidateConfig(config *models.Config) error {
+func (p *LogicalProvider) ValidateConfig(config *models.Config) error {
 	if config.ConnectionString == "" {
 		return fmt.Errorf("connection string is required for logical restore")
 	}
@@ -65,16 +64,15 @@ func (p *LogicalRestoreProvider) ValidateConfig(config *models.Config) error {
 }
 
 // StartRestore starts the logical restore process using pg_dump/pg_restore
-func (p *LogicalRestoreProvider) StartRestore(ctx context.Context, params RestoreParams) error {
+func (p *LogicalProvider) StartRestore(ctx context.Context, params ProviderParams) error {
 	p.logger.Info().
 		Str("restore_id", params.Restore.ID).
 		Str("restore_name", params.Restore.Name).
 		Int("port", params.Port).
 		Msg("Starting logical restore via pg_dump/pg_restore")
 
-	// Validate inputs using orchestrator
-	orchestrator := restore.NewOrchestrator(p.logger)
-	if err := orchestrator.ValidateInputs(
+	// Validate inputs using process manager
+	if err := params.ProcessManager.ValidateInputs(
 		params.Config.ConnectionString,
 		params.Config.PostgresVersion,
 		params.Port,
@@ -105,7 +103,7 @@ func (p *LogicalRestoreProvider) StartRestore(ctx context.Context, params Restor
 		ConnectionString:   params.Config.ConnectionString,
 		PgVersion:          params.Config.PostgresVersion,
 		PgPort:             params.Port,
-		RestoreName:        params.Restore.Name,
+		DatabaseName:       params.Restore.Name,
 		SourceDatabaseName: params.Config.DatabaseName, // Extracted from connection string
 		SchemaOnly:         schemaOnlyStr,
 		ParallelJobs:       tuning.ParallelJobs,
@@ -121,8 +119,8 @@ func (p *LogicalRestoreProvider) StartRestore(ctx context.Context, params Restor
 	}
 
 	// Start the restore script in background using nohup
-	logFile := orchestrator.GetLogFilePath(params.Restore.Name)
-	pidFile := orchestrator.GetPIDFilePath(params.Restore.Name)
+	logFile := params.ProcessManager.GetLogFilePath(params.Restore.Name)
+	pidFile := params.ProcessManager.GetPIDFilePath(params.Restore.Name)
 
 	// Write script to a temporary file to avoid shell quoting issues
 	scriptPath := fmt.Sprintf("/tmp/branchd_restore_%s.sh", params.Restore.Name)
@@ -154,7 +152,7 @@ func (p *LogicalRestoreProvider) StartRestore(ctx context.Context, params Restor
 }
 
 // renderScript renders the bash script template with parameters
-func (p *LogicalRestoreProvider) renderScript(params logicalRestoreParams) (string, error) {
+func (p *LogicalProvider) renderScript(params logicalRestoreParams) (string, error) {
 	tmpl, err := template.New("logical-restore").Parse(logicalRestoreScript)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse script template: %w", err)

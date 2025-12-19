@@ -1,4 +1,4 @@
-package workers
+package restore
 
 import (
 	"bytes"
@@ -13,20 +13,19 @@ import (
 
 	"github.com/branchd-dev/branchd/internal/models"
 	"github.com/branchd-dev/branchd/internal/providers"
-	"github.com/branchd-dev/branchd/internal/restore"
 )
 
 //go:embed crunchy_bridge_restore.sh
 var crunchyBridgeRestoreScript string
 
 type crunchyBridgeRestoreParams struct {
-	PgVersion           string
-	PgPort              int
-	RestoreName         string // Name of the restore (e.g., restore_20251211000011) - used for logs, ZFS, service
-	TargetDatabaseName  string // Actual database name in PostgreSQL
-	DataDir             string
-	PgBackRestConfPath  string
-	StanzaName          string
+	PgVersion          string
+	PgPort             int
+	RestoreName        string // Name of the restore (e.g., restore_20251211000011) - used for logs, ZFS, service
+	TargetDatabaseName string // Actual database name in PostgreSQL
+	DataDir            string
+	PgBackRestConfPath string
+	StanzaName         string
 }
 
 // CrunchyBridgeProvider implements restore from Crunchy Bridge backups via pgBackRest
@@ -43,7 +42,7 @@ func NewCrunchyBridgeProvider(logger zerolog.Logger) *CrunchyBridgeProvider {
 
 // GetProviderType returns the provider type identifier
 func (p *CrunchyBridgeProvider) GetProviderType() string {
-	return "crunchy_bridge"
+	return string(ProviderTypeCrunchyBridge)
 }
 
 // ValidateConfig validates that Crunchy Bridge is properly configured
@@ -64,7 +63,7 @@ func (p *CrunchyBridgeProvider) ValidateConfig(config *models.Config) error {
 }
 
 // StartRestore starts the restore process from Crunchy Bridge using pgBackRest
-func (p *CrunchyBridgeProvider) StartRestore(ctx context.Context, params RestoreParams) error {
+func (p *CrunchyBridgeProvider) StartRestore(ctx context.Context, params ProviderParams) error {
 	p.logger.Info().
 		Str("restore_id", params.Restore.ID).
 		Str("restore_name", params.Restore.Name).
@@ -146,9 +145,8 @@ func (p *CrunchyBridgeProvider) StartRestore(ctx context.Context, params Restore
 	}
 
 	// Start the restore script in background
-	orchestrator := restore.NewOrchestrator(p.logger)
-	logFile := orchestrator.GetLogFilePath(params.Restore.Name)
-	pidFile := orchestrator.GetPIDFilePath(params.Restore.Name)
+	logFile := params.ProcessManager.GetLogFilePath(params.Restore.Name)
+	pidFile := params.ProcessManager.GetPIDFilePath(params.Restore.Name)
 
 	// Write script to a temporary file
 	scriptPath := fmt.Sprintf("/tmp/branchd_restore_cb_%s.sh", params.Restore.Name)

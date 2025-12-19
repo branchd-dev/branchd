@@ -31,6 +31,7 @@ import (
 	"github.com/branchd-dev/branchd/internal/caddy"
 	"github.com/branchd-dev/branchd/internal/config"
 	"github.com/branchd-dev/branchd/internal/models"
+	"github.com/branchd-dev/branchd/internal/restores"
 )
 
 // Server represents the HTTP server
@@ -42,6 +43,7 @@ type Server struct {
 	validator       *validator.Validate
 	asynqClient     *asynq.Client
 	branchesService *branches.Service
+	restoresService *restores.Service
 	caddyService    *caddy.Service
 	version         string
 }
@@ -99,6 +101,9 @@ func New(cfg *config.Config, zlog zerolog.Logger, version string) (*Server, erro
 	// Initialize branches service (now runs locally, no SSH client needed)
 	branchesService := branches.NewService(db, cfg, zlog)
 
+	// Initialize restores service
+	restoresService := restores.NewService(db, zlog)
+
 	// Initialize Caddy service for TLS configuration
 	caddyService, err := caddy.NewService(zlog)
 	if err != nil {
@@ -114,6 +119,7 @@ func New(cfg *config.Config, zlog zerolog.Logger, version string) (*Server, erro
 		validator:       validate,
 		asynqClient:     asynqClient,
 		branchesService: branchesService,
+		restoresService: restoresService,
 		caddyService:    caddyService,
 		version:         version,
 	}
